@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APS Leadership and Learning Dashboard</title>
+    
+    <!-- Compiled Tailwind CSS CDN -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chart.js DataLabels Plugin -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+
+    <!-- React 18 & React DOM CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.4); border-radius: 3px; }
+        .bg-navy-800 { background-color: #26365a; }
+        .bg-navy-900 { background-color: #1a253e; }
+        .bg-navy-950 { background-color: #101728; }
+        .border-navy-700 { border-color: #234367; }
+        .border-navy-800 { border-color: #26365a; }
+        .text-accent-sky { color: #0ea5e9; }
+    </style>
+</head>
+<body class="h-full bg-gray-50 text-gray-800 antialiased">
+
+    <div id="root" class="h-full"></div>
+
+    <script>
+        const { useState, useEffect, useMemo, useRef, createElement: e } = React;
+
+        // Register Chart.js DataLabels plugin if available
+        if (typeof ChartDataLabels !== 'undefined') {
+            Chart.register(ChartDataLabels);
+        }
+
+        // Fact Table: Walkthrough Form Responses
+        const FACT_WALKTHROUGHS_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ10aRMr6OzbW9MdPhCen0dXh85qkDw98s8Rwjf0JTPQj5kjjRIl4sqjjDCMaDRrawBJvcqYW-Zd7ui/pub?output=csv';
+        
+        // Dimension Table: Dim_School (Key: "School Name")
+        const DIM_SCHOOL_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSsrR_j6JF0QxYAYVb8Fwt9z9QirdZSxsi9i0_Fb7gbAbPPWDxJPX5g3Cy25OoGFLruIM9f2zmQ7BcT/pub?output=csv';
+
+        function App() {
+            const [data, setData] = useState([]);
+            const [schoolDimMap, setSchoolDimMap] = useState({});
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [syncTime, setSyncTime] = useState('Not synced yet');
+            
+            // Sidebar Collapsible Hierarchy State
+            const [walkthroughsExpanded, setWalkthroughsExpanded] = useState(true);
+
+            // Filter States
+            const [activeDomain, setActiveDomain] = useState('all');
+            const [selectedAlignmentBar, setSelectedAlignmentBar] = useState('all');
+            const [selectedHqimBar, setSelectedHqimBar] = useState('all');
+            const [selectedSchool, setSelectedSchool] = useState('all');
+            const [selectedLevel, setSelectedLevel] = useState('all');
+            const [selectedFramework, setSelectedFramework] = useState('all');
+            const [selectedSupervisor, setSelectedSupervisor] = useState('all');
+
+            const alignChartRef = useRef(null);
+            const hqimChartRef = useRef(null);
+
+            const alignChartInstance = useRef(null);
+            const hqimChartInstance = useRef(null);
+
+            // Multiline & Quote-Aware State Machine CSV Parser
+            const parseCSV = (text) => {
+                const rows = [];
+                let row = [];
+                let cell = '';
+                let inQuotes = false;
+
+                for (let i = 0; i < text.length; i++) {
+                    const char = text[i];
+                    const nextChar = text[i + 1];
+
+                    if (char === '"') {
+                        if (inQuotes && nextChar === '"') {
+                            cell += '"';
+                            i++;
+                        } else {
+                            inQuotes = !inQuotes;
+                        }
+                    } else if (char === ',' && !inQuotes) {
+                        row.push(cell.trim());
+                        cell = '';
+                    } else if ((char === '\r' || char === '\n') && !inQuotes) {
+                        if (char === '\r' && nextChar === '\n') {
+                            i++;
+                        }
+                        row.push(cell.trim());
+                        rows.push(row);
+                        row = [];
+                        cell = '';
+                    } else {
+                        cell += char;
+                    }
+                }
+                if (cell || row.length > 0) {
+                    row.push(cell.trim());
+                    rows.push(row);
+                }
+                return rows;
+            };
+
+            const fetchAllData = async () => {
+                setLoading(true);
+                setError(null);
+                try {
+                    const [factRes, dimRes] = await Promise.all([
+                        fetch(FACT_WALKTHROUGHS_CSV_URL),
+                        fetch(DIM_SCHOOL_CSV_URL)
+                    ]);
+
+                    if (!factRes.ok) throw new Error(`Fact Table HTTP ${factRes.status}`);
+                    if (!dimRes.ok) throw new Error(`Dim_School HTTP ${dimRes.status}`);
+
+                    const factCsvText = await factRes.text();
+                    const dimCsvText = await dimRes.text();
+
+                    const parsedFactRows = parseCSV(factCsvText);
+                    const parsedDimRows = parseCSV(dimCsvText);
+
+                    const dimMap = {};
+                    if (parsedDimRows.length > 1) {
+                        const dimHeaders = parsedDimRows[0].map(function(h) { return h.trim().toLowerCase(); });
+                        const schoolKeyIdx = dimHeaders.findIndex(function(h) { return h.includes('school') || h.includes('name'); });
+                        const locIdIdx = dimHeaders.findIndex(function(h) { return h.includes('locationid') || h.includes('location id') || h.includes('location'); });
+                        const levelIdx = dimHeaders.findIndex(function(h) { return h.includes('school level') || h.includes('level'); });
+                        const frameworkIdx = dimHeaders.findIndex(function(h) { return h.includes('performance framework') || h.includes('framework') || h.includes('aps performance'); });
+                        const supervisorIdx = dimHeaders.findIndex(function(h) { return h.includes('supervisor'); });
+
+                        parsedDimRows.slice(1).forEach(function(r) {
+                            const schoolName = r[schoolKeyIdx >= 0 ? schoolKeyIdx : 0];
+                            if (schoolName) {
+                                dimMap[schoolName.trim()] = {
+                                    rawRow: r,
+                                    locationId: (locIdIdx >= 0 ? r[locIdIdx] : '') || 'N/A',
+                                    schoolLevel: (levelIdx >= 0 ? r[levelIdx] : '') || 'N/A',
+                                    performanceFramework: (frameworkIdx >= 0 ? r[frameworkIdx] : '') || 'N/A',
+                                    supervisor: (supervisorIdx >= 0 ? r[supervisorIdx] : '') || 'N/A'
+                                };
+                            }
+                        });
+                    }
+                    setSchoolDimMap(dimMap);
+
+                    if (parsedFactRows.length < 2) throw new Error('Walkthrough Fact CSV appears empty.');
+
+                    const factHeaders = parsedFactRows[0].map(function(h) { return h.trim().toLowerCase(); });
+                    const domainIdx = factHeaders.findIndex(function(h) { return h.includes('domain') || h.includes('subject'); });
+                    const schoolIdx = factHeaders.findIndex(function(h) { return h.includes('school'); });
+                    const gradeIdx = factHeaders.findIndex(function(h) { return h.includes('grade level') || h.includes('grade'); });
+                    const alignIdx = factHeaders.findIndex(function(h) { return h.includes('standard') || h.includes('alignment'); });
+                    const hqimIdx = factHeaders.findIndex(function(h) { return h.includes('hqim') || h.includes('materials'); });
+                    const taskIdx = factHeaders.findIndex(function(h) { return h.includes('task') || h.includes('observed') || h.includes('lesson'); });
+
+                    const formatted = parsedFactRows.slice(1)
+                        .filter(function(r) {
+                            const hasValues = r.some(function(cell) { return cell.length > 0; });
+                            const isHeaderRow = r[0] && r[0].toLowerCase().includes('subject domain');
+                            return hasValues && !isHeaderRow;
+                        })
+                        .map(function(r, i) {
+                            const rawDomain = (domainIdx >= 0 ? r[domainIdx] : r[0]) || '';
+                            let domain = 'Other';
+                            
+                            if (rawDomain.toLowerCase().includes('math')) {
+                                domain = 'Math';
+                            } else if (rawDomain.toLowerCase().includes('literacy')) {
+                                domain = 'Early Literacy';
+                            }
+
+                            const schoolName = (schoolIdx >= 0 ? r[schoolIdx] : r[1]) || 'N/A';
+                            const dimData = dimMap[schoolName.trim()] || {};
+
+                            return {
+                                id: i + 1,
+                                domain: domain,
+                                school: schoolName,
+                                locationId: dimData.locationId || 'N/A',
+                                schoolLevel: dimData.schoolLevel || 'N/A',
+                                performanceFramework: dimData.performanceFramework || 'N/A',
+                                supervisor: dimData.supervisor || 'N/A',
+                                grade: (gradeIdx >= 0 ? r[gradeIdx] : r[2]) || 'N/A',
+                                alignment: (alignIdx >= 0 ? r[alignIdx] : r[4]) || 'Unable to Determine',
+                                hqim: (hqimIdx >= 0 ? r[hqimIdx] : r[5]) || 'Not Observed',
+                                task: (taskIdx >= 0 ? r[taskIdx] : r[6]) || 'N/A'
+                            };
+                        })
+                        .filter(function(item) { return item.domain === 'Math' || item.domain === 'Early Literacy'; });
+
+                    setData(formatted);
+                    setSyncTime(new Date().toLocaleTimeString());
+                } catch (err) {
+                    console.error("Star Schema Data Fetch Error:", err);
+                    setError(err.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            useEffect(function() {
+                fetchAllData();
+                const interval = setInterval(fetchAllData, 900000);
+                return function() { clearInterval(interval); };
+            }, []);
+
+            const schoolsList = useMemo(function() {
+                return [...new Set(data.map(function(d) { return d.school; }))].filter(function(s) { return s && s !== 'N/A'; }).sort();
+            }, [data]);
+
+            const levelsList = useMemo(function() {
+                return [...new Set(data.map(function(d) { return d.schoolLevel; }))].filter(function(l) { return l && l !== 'N/A'; }).sort();
+            }, [data]);
+
+            const frameworksList = useMemo(function() {
+                return [...new Set(data.map(function(d) { return d.performanceFramework; }))].filter(function(f) { return f && f !== 'N/A'; }).sort();
+            }, [data]);
+
+            const supervisorsList = useMemo(function() {
+                return [...new Set(data.map(function(d) { return d.supervisor; }))].filter(function(s) { return s && s !== 'N/A'; }).sort();
+            }, [data]);
+
+            // Filtered Walkthrough Dataset including Interactive Chart Click Filters & Supervisor Filter
+            const filteredData = useMemo(function() {
+                return data.filter(function(item) {
+                    const matchesDomain = activeDomain === 'all' || item.domain === activeDomain;
+                    const matchesSchool = selectedSchool === 'all' || item.school === selectedSchool;
+                    const matchesLevel = selectedLevel === 'all' || item.schoolLevel === selectedLevel;
+                    const matchesFramework = selectedFramework === 'all' || item.performanceFramework === selectedFramework;
+                    const matchesSupervisor = selectedSupervisor === 'all' || item.supervisor === selectedSupervisor;
+                    
+                    // Alignment Chart Bar Click Match
+                    let matchesAlignBar = true;
+                    const alignLower = item.alignment.toLowerCase();
+                    if (selectedAlignmentBar === 'Observed') {
+                        matchesAlignBar = alignLower === 'observed';
+                    } else if (selectedAlignmentBar === 'Partially Observed') {
+                        matchesAlignBar = alignLower.includes('partial');
+                    } else if (selectedAlignmentBar === 'Other / Not Observed') {
+                        matchesAlignBar = !alignLower.includes('observed') || alignLower.includes('not');
+                    }
+
+                    // HQIM Chart Bar Click Match
+                    let matchesHqimBar = true;
+                    const hqimLower = item.hqim.toLowerCase();
+                    const isHqimObserved = !hqimLower.includes('not observed') && item.hqim !== 'N/A' && item.hqim.length > 0;
+                    if (selectedHqimBar === 'HQIM Observed') {
+                        matchesHqimBar = isHqimObserved;
+                    } else if (selectedHqimBar === 'Not Observed / NA') {
+                        matchesHqimBar = !isHqimObserved;
+                    }
+                    
+                    return matchesDomain && matchesSchool && matchesLevel && matchesFramework && matchesSupervisor && matchesAlignBar && matchesHqimBar;
+                });
+            }, [data, activeDomain, selectedSchool, selectedLevel, selectedFramework, selectedSupervisor, selectedAlignmentBar, selectedHqimBar]);
+
+            const metrics = useMemo(function() {
+                const total = filteredData.length;
+                const alignObserved = filteredData.filter(function(w) { return w.alignment.toLowerCase().includes('observed') && !w.alignment.toLowerCase().includes('not'); }).length;
+                const alignPct = total > 0 ? Math.round((alignObserved / total) * 100) : 0;
+
+                const hqimObserved = filteredData.filter(function(w) { return !w.hqim.toLowerCase().includes('not observed') && w.hqim !== 'N/A' && w.hqim.length > 0; }).length;
+                const hqimPct = total > 0 ? Math.round((hqimObserved / total) * 100) : 0;
+
+                const uniqueSchools = new Set(filteredData.map(function(w) { return w.school; })).size;
+
+                return { total, alignPct, hqimPct, uniqueSchools };
+            }, [filteredData]);
+
+            // Chart Rendering Logic with Click Events and DataLabels
+            useEffect(function() {
+                if (!alignChartRef.current || !hqimChartRef.current) return;
+
+                const domainBaseData = data.filter(function(item) {
+                    return activeDomain === 'all' || item.domain === activeDomain;
+                });
+
+                // 1. Grade-Level Standard Alignment Chart
+                const observed = domainBaseData.filter(function(w) { return w.alignment.toLowerCase() === 'observed'; }).length;
+                const partial = domainBaseData.filter(function(w) { return w.alignment.toLowerCase().includes('partial'); }).length;
+                const other = domainBaseData.length - (observed + partial);
+                const chartTotal = domainBaseData.length;
+
+                if (alignChartInstance.current) alignChartInstance.current.destroy();
+                
+                alignChartInstance.current = new Chart(alignChartRef.current, {
+                    type: 'bar',
+                    data: {
+                        labels: ['Observed', 'Partially Observed', 'Other / Not Observed'],
+                        datasets: [{
+                            data: [observed, partial, Math.max(0, other)],
+                            backgroundColor: function(context) {
+                                const idx = context.dataIndex;
+                                const labels = ['Observed', 'Partially Observed', 'Other / Not Observed'];
+                                if (selectedAlignmentBar !== 'all' && selectedAlignmentBar !== labels[idx]) {
+                                    return ['#10b98140', '#f59e0b40', '#64748b40'][idx];
+                                }
+                                return ['#10b981', '#f59e0b', '#64748b'][idx];
+                            },
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        onClick: function(event, elements) {
+                            if (elements && elements.length > 0) {
+                                const index = elements[0].index;
+                                const labels = ['Observed', 'Partially Observed', 'Other / Not Observed'];
+                                const clickedLabel = labels[index];
+                                setSelectedAlignmentBar(function(prev) {
+                                    return prev === clickedLabel ? 'all' : clickedLabel;
+                                });
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            datalabels: {
+                                anchor: 'end',
+                                align: 'top',
+                                offset: 2,
+                                font: { weight: 'bold', size: 11 },
+                                color: '#334155',
+                                formatter: function(value) {
+                                    if (value === 0) return '';
+                                    const pct = chartTotal > 0 ? Math.round((value / chartTotal) * 100) : 0;
+                                    return `${value} (${pct}%)`;
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                ticks: { precision: 0 },
+                                grace: '15%'
+                            }
+                        }
+                    }
+                });
+
+                // 2. High-Quality Instructional Materials Bar Chart
+                const hqimObserved = domainBaseData.filter(function(w) { 
+                    return !w.hqim.toLowerCase().includes('not observed') && w.hqim !== 'N/A' && w.hqim.length > 0; 
+                }).length;
+                const hqimNotObserved = chartTotal - hqimObserved;
+
+                if (hqimChartInstance.current) hqimChartInstance.current.destroy();
+                hqimChartInstance.current = new Chart(hqimChartRef.current, {
+                    type: 'bar',
+                    data: {
+                        labels: ['HQIM Observed', 'Not Observed / NA'],
+                        datasets: [{
+                            data: [hqimObserved, Math.max(0, hqimNotObserved)],
+                            backgroundColor: function(context) {
+                                const idx = context.dataIndex;
+                                const labels = ['HQIM Observed', 'Not Observed / NA'];
+                                if (selectedHqimBar !== 'all' && selectedHqimBar !== labels[idx]) {
+                                    return ['#0ea5e940', '#64748b40'][idx];
+                                }
+                                return ['#0ea5e9', '#64748b'][idx];
+                            },
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        onClick: function(event, elements) {
+                            if (elements && elements.length > 0) {
+                                const index = elements[0].index;
+                                const labels = ['HQIM Observed', 'Not Observed / NA'];
+                                const clickedLabel = labels[index];
+                                setSelectedHqimBar(function(prev) {
+                                    return prev === clickedLabel ? 'all' : clickedLabel;
+                                });
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            datalabels: {
+                                anchor: 'end',
+                                align: 'top',
+                                offset: 2,
+                                font: { weight: 'bold', size: 11 },
+                                color: '#334155',
+                                formatter: function(value) {
+                                    if (value === 0) return '';
+                                    const pct = chartTotal > 0 ? Math.round((value / chartTotal) * 100) : 0;
+                                    return `${value} (${pct}%)`;
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                ticks: { precision: 0 },
+                                grace: '15%'
+                            }
+                        }
+                    }
+                });
+
+            }, [filteredData, activeDomain, selectedAlignmentBar, selectedHqimBar, data]);
+
+            const litTotal = useMemo(function() { return data.filter(function(d) { return d.domain === 'Early Literacy'; }).length; }, [data]);
+            const mathTotal = useMemo(function() { return data.filter(function(d) { return d.domain === 'Math'; }).length; }, [data]);
+
+            const handleParentWalkthroughClick = function() {
+                setActiveDomain('all');
+                setWalkthroughsExpanded(!walkthroughsExpanded);
+            };
+
+            // Derive active menu item title dynamically
+            const activeMenuTitle = useMemo(function() {
+                if (activeDomain === 'Early Literacy') return 'Early Literacy';
+                if (activeDomain === 'Math') return 'Math';
+                return 'Instructional Walkthroughs';
+            }, [activeDomain]);
+
+            return e('div', { className: 'flex h-screen overflow-hidden' },
+                e('aside', { className: 'w-64 bg-navy-800 text-white flex flex-col flex-shrink-0 shadow-2xl' },
+                    e('div', { className: 'py-4 px-6 bg-navy-900 border-b border-navy-700 min-h-16 flex items-center' },
+                        e('div', { className: 'flex items-center space-x-3 w-full' },
+                            e('div', { className: 'w-9 h-9 rounded-xl bg-blue-500 flex items-center justify-center shadow-lg flex-shrink-0' },
+                                e('i', { className: 'fa-solid fa-graduation-cap text-white text-lg' })
+                            ),
+                            e('div', { className: 'flex-1' },
+                                e('span', { className: 'font-bold text-sm leading-tight text-white block break-words' }, 'APS Leadership & Learning Dashboard')
+                            )
+                        )
+                    ),
+                    e('div', { className: 'flex-1 overflow-y-auto px-4 py-6 space-y-6' },
+                        e('div', null,
+                            e('p', { className: 'px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3' }, 'Navigation'),
+                            e('nav', { className: 'space-y-1' },
+                                e('button', {
+                                    onClick: handleParentWalkthroughClick,
+                                    className: `w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeDomain === 'all' ? 'bg-blue-900 text-white border-l-4 border-blue-400' : 'text-gray-300 hover:bg-navy-700'}`
+                                },
+                                    e('span', { className: 'flex items-center space-x-2.5 overflow-hidden' },
+                                        e('i', { className: `fa-solid fa-chevron-${walkthroughsExpanded ? 'down' : 'right'} text-xs text-gray-400 w-3` }),
+                                        e('i', { className: 'fa-solid fa-clipboard-list text-blue-400 w-4' }),
+                                        e('span', { className: 'truncate font-semibold' }, 'Instructional Walkthroughs')
+                                    ),
+                                    e('span', { className: 'text-xs bg-navy-900 px-2 py-0.5 rounded-full font-bold ml-1' }, data.length)
+                                ),
+                                walkthroughsExpanded && e('div', { className: 'pl-6 space-y-1 mt-1 border-l-2 border-navy-700 ml-3' },
+                                    e('button', {
+                                        onClick: function() { setActiveDomain('Early Literacy'); },
+                                        className: `w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${activeDomain === 'Early Literacy' ? 'bg-purple-900/80 text-white font-bold' : 'text-gray-300 hover:bg-navy-700'}`
+                                    },
+                                        e('span', { className: 'flex items-center space-x-2' },
+                                            e('i', { className: 'fa-solid fa-book-open text-purple-400 w-4' }),
+                                            e('span', null, 'Early Literacy')
+                                        ),
+                                        e('span', { className: 'text-[10px] bg-navy-900 px-1.5 py-0.5 rounded-full font-semibold' }, litTotal)
+                                    ),
+                                    e('button', {
+                                        onClick: function() { setActiveDomain('Math'); },
+                                        className: `w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${activeDomain === 'Math' ? 'bg-green-900/80 text-white font-bold' : 'text-gray-300 hover:bg-navy-700'}`
+                                    },
+                                        e('span', { className: 'flex items-center space-x-2' },
+                                            e('i', { className: 'fa-solid fa-calculator text-green-400 w-4' }),
+                                            e('span', null, 'Math')
+                                        ),
+                                        e('span', { className: 'text-[10px] bg-navy-900 px-1.5 py-0.5 rounded-full font-semibold' }, mathTotal)
+                                    )
+                                )
+                            )
+                        )
+                    ),
+                    e('div', { className: 'p-4 bg-navy-900 border-t border-navy-700 text-xs text-gray-400' },
+                        e('p', { className: 'font-semibold text-gray-300' }, 'Connected Dimensions'),
+                        e('p', { className: 'text-gray-400 mt-0.5' }, `Dim_School (${Object.keys(schoolDimMap).length} sites loaded)`)
+                    )
+                ),
+                e('div', { className: 'flex-1 flex flex-col h-full overflow-hidden' },
+                    e('header', { className: 'h-16 bg-white border-b border-gray-200 px-8 flex items-center justify-between z-10' },
+                        e('div', null,
+                            e('h1', { className: 'text-lg font-bold text-gray-800 leading-none' },
+                                activeMenuTitle
+                            ),
+                            e('span', { className: 'text-xs text-gray-500 mt-1 block' },
+                                activeDomain === 'all' ? 'Instructional Walkthroughs Overview (Combined)' : `${activeDomain} Walkthrough Domain View`
+                            )
+                        ),
+                        e('div', { className: 'flex items-center space-x-4' },
+                            // Domain Switcher Toggle Group
+                            e('div', { className: 'inline-flex p-1 bg-gray-100 rounded-xl border border-gray-200 text-xs font-semibold' },
+                                e('button', {
+                                    onClick: function() { setActiveDomain('all'); },
+                                    className: `px-3 py-1.5 rounded-lg transition-all ${activeDomain === 'all' ? 'bg-white text-navy-900 shadow-sm font-bold' : 'text-gray-600 hover:text-gray-900'}`
+                                }, 'Combined'),
+                                e('button', {
+                                    onClick: function() { setActiveDomain('Early Literacy'); },
+                                    className: `px-3 py-1.5 rounded-lg transition-all ${activeDomain === 'Early Literacy' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'text-gray-600 hover:text-gray-900'}`
+                                }, 'Early Literacy'),
+                                e('button', {
+                                    onClick: function() { setActiveDomain('Math'); },
+                                    className: `px-3 py-1.5 rounded-lg transition-all ${activeDomain === 'Math' ? 'bg-green-600 text-white shadow-sm font-bold' : 'text-gray-600 hover:text-gray-900'}`
+                                }, 'Math')
+                            ),
+                            e('button', { onClick: fetchAllData, className: 'flex items-center space-x-2 bg-navy-800 hover:bg-navy-900 text-white text-xs px-3.5 py-2 rounded-lg font-medium transition shadow-sm' },
+                                e('i', { className: 'fa-solid fa-rotate-right' }),
+                                e('span', null, 'Sync Tables')
+                            )
+                        )
+                    ),
+                    e('main', { className: 'flex-1 overflow-y-auto p-6 space-y-6' },
+                        error && e('div', { className: 'p-4 rounded-xl text-xs font-medium bg-red-100 text-red-700 border border-red-200' },
+                            e('i', { className: 'fa-solid fa-triangle-exclamation mr-2' }),
+                            e('span', null, `Data Error: ${error}`)
+                        ),
+                        e('div', { className: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4' },
+                            e('div', { className: 'bg-white p-5 rounded-2xl border border-gray-200 shadow-sm' },
+                                e('span', { className: 'text-xs font-semibold uppercase text-gray-400' }, 'Total Observations'),
+                                e('div', { className: 'text-2xl font-bold mt-2 text-gray-800' }, loading ? '--' : metrics.total)
+                            ),
+                            e('div', { className: 'bg-white p-5 rounded-2xl border border-gray-200 shadow-sm' },
+                                e('span', { className: 'text-xs font-semibold uppercase text-gray-400' }, 'GRADE-LEVEL STANDARDS'),
+                                e('div', { className: 'text-2xl font-bold mt-2 text-green-600' }, loading ? '--%' : `${metrics.alignPct}%`)
+                            ),
+                            e('div', { className: 'bg-white p-5 rounded-2xl border border-gray-200 shadow-sm' },
+                                e('span', { className: 'text-xs font-semibold uppercase text-gray-400' }, 'HQIM Implementation'),
+                                e('div', { className: 'text-2xl font-bold mt-2 text-blue-600' }, loading ? '--%' : `${metrics.hqimPct}%`)
+                            ),
+                            e('div', { className: 'bg-white p-5 rounded-2xl border border-gray-200 shadow-sm' },
+                                e('span', { className: 'text-xs font-semibold uppercase text-gray-400' }, 'Schools Represented'),
+                                e('div', { className: 'text-2xl font-bold mt-2 text-purple-600' }, loading ? '--' : metrics.uniqueSchools)
+                            )
+                        ),
+                        e('div', { className: 'space-y-4' },
+                            e('div', { className: 'bg-white p-5 rounded-2xl border border-gray-200 shadow-sm' },
+                                e('div', { className: 'flex justify-between items-center mb-2' },
+                                    e('h3', { className: 'text-sm font-bold text-gray-800' }, 'Grade-Level Standard Alignment'),
+                                    e('span', { className: 'text-xs text-gray-400 italic' }, 'Click a bar to filter log table')
+                                ),
+                                e('div', { className: 'relative h-32' },
+                                    e('canvas', { ref: alignChartRef })
+                                )
+                            ),
+                            e('div', { className: 'bg-white p-5 rounded-2xl border border-gray-200 shadow-sm' },
+                                e('div', { className: 'flex justify-between items-center mb-2' },
+                                    e('h3', { className: 'text-sm font-bold text-gray-800' }, 'High-Quality Instructional Materials'),
+                                    e('span', { className: 'text-xs text-gray-400 italic' }, 'Click a bar to filter log table')
+                                ),
+                                e('div', { className: 'relative h-32' },
+                                    e('canvas', { ref: hqimChartRef })
+                                )
+                            )
+                        ),
+                        e('div', { className: 'bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden' },
+                            e('div', { className: 'p-5 flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-gray-100' },
+                                e('div', { className: 'flex items-center space-x-3 flex-wrap gap-y-2' },
+                                    e('h3', { className: 'text-base font-bold text-gray-800' }, 'Walkthrough Observations Log'),
+                                    selectedAlignmentBar !== 'all' && e('span', {
+                                        className: 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 cursor-pointer',
+                                        onClick: function() { setSelectedAlignmentBar('all'); },
+                                        title: 'Click to reset alignment filter'
+                                    },
+                                        `Alignment: ${selectedAlignmentBar}`,
+                                        e('i', { className: 'fa-solid fa-xmark ml-1.5 text-xs' })
+                                    ),
+                                    selectedHqimBar !== 'all' && e('span', {
+                                        className: 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-sky-100 text-sky-800 cursor-pointer',
+                                        onClick: function() { setSelectedHqimBar('all'); },
+                                        title: 'Click to reset HQIM filter'
+                                    },
+                                        `HQIM: ${selectedHqimBar}`,
+                                        e('i', { className: 'fa-solid fa-xmark ml-1.5 text-xs' })
+                                    )
+                                ),
+                                e('div', { className: 'flex items-center gap-2 flex-wrap' },
+                                    supervisorsList.length > 0 && e('select', {
+                                        value: selectedSupervisor,
+                                        onChange: function(ev) { setSelectedSupervisor(ev.target.value); },
+                                        className: 'bg-gray-50 text-xs px-3 py-2 rounded-lg border border-gray-300'
+                                    },
+                                        e('option', { value: 'all' }, 'All Supervisors'),
+                                        supervisorsList.map(function(s) { return e('option', { key: s, value: s }, s); })
+                                    ),
+                                    levelsList.length > 0 && e('select', {
+                                        value: selectedLevel,
+                                        onChange: function(ev) { setSelectedLevel(ev.target.value); },
+                                        className: 'bg-gray-50 text-xs px-3 py-2 rounded-lg border border-gray-300'
+                                    },
+                                        e('option', { value: 'all' }, 'All School Levels'),
+                                        levelsList.map(function(lvl) { return e('option', { key: lvl, value: lvl }, lvl); })
+                                    ),
+                                    frameworksList.length > 0 && e('select', {
+                                        value: selectedFramework,
+                                        onChange: function(ev) { setSelectedFramework(ev.target.value); },
+                                        className: 'bg-gray-50 text-xs px-3 py-2 rounded-lg border border-gray-300'
+                                    },
+                                        e('option', { value: 'all' }, 'All Performance Frameworks'),
+                                        frameworksList.map(function(fw) { return e('option', { key: fw, value: fw }, fw); })
+                                    ),
+                                    e('select', {
+                                        value: selectedSchool,
+                                        onChange: function(ev) { setSelectedSchool(ev.target.value); },
+                                        className: 'bg-gray-50 text-xs px-3 py-2 rounded-lg border border-gray-300'
+                                    },
+                                        e('option', { value: 'all' }, 'All Schools'),
+                                        schoolsList.map(function(s) { return e('option', { key: s, value: s }, s); })
+                                    )
+                                )
+                            ),
+                            e('div', { className: 'overflow-x-auto' },
+                                e('table', { className: 'w-full text-left border-collapse' },
+                                    e('thead', null,
+                                        e('tr', { className: 'bg-gray-50 text-[11px] uppercase tracking-wider text-gray-400 font-semibold border-b border-gray-100' },
+                                            e('th', { className: 'py-3 px-5' }, 'Domain'),
+                                            e('th', { className: 'py-3 px-5' }, 'School Name'),
+                                            e('th', { className: 'py-3 px-5' }, 'Grade'),
+                                            e('th', { className: 'py-3 px-5' }, 'Grade-Level Standards'),
+                                            e('th', { className: 'py-3 px-5' }, 'HQIM Implementation'),
+                                            e('th', { className: 'py-3 px-5' }, 'Task Observed')
+                                        )
+                                    ),
+                                    e('tbody', { className: 'divide-y divide-gray-100 text-xs' },
+                                        loading ? e('tr', null, e('td', { colSpan: 6, className: 'py-6 text-center text-gray-400' }, 'Syncing Fact and Dimension Tables...'))
+                                        : filteredData.length === 0 ? e('tr', null, e('td', { colSpan: 6, className: 'py-6 text-center text-gray-400' }, 'No matching records found.'))
+                                        : filteredData.map(function(item) {
+                                            return e('tr', { key: item.id, className: 'hover:bg-gray-50' },
+                                                e('td', { className: 'py-3.5 px-5 align-top' },
+                                                    e('span', {
+                                                        className: `px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                                            item.domain === 'Math' ? 'bg-green-100 text-green-800' : 'bg-purple-100 text-purple-800'
+                                                        }`
+                                                    }, item.domain)
+                                                ),
+                                                e('td', { className: 'py-3.5 px-5 font-semibold text-gray-800 align-top' },
+                                                    e('div', null, item.school),
+                                                    (item.schoolLevel !== 'N/A' || item.performanceFramework !== 'N/A' || item.supervisor !== 'N/A') && e('div', { className: 'text-[10px] text-gray-400 font-normal space-x-1 mt-0.5' },
+                                                        item.schoolLevel !== 'N/A' && e('span', { className: 'bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium' }, item.schoolLevel),
+                                                        item.performanceFramework !== 'N/A' && e('span', { className: 'bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-medium' }, item.performanceFramework),
+                                                        item.supervisor !== 'N/A' && e('span', { className: 'bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-medium' }, `Sup: ${item.supervisor}`)
+                                                    )
+                                                ),
+                                                e('td', { className: 'py-3.5 px-5 font-medium align-top' }, `Grade ${item.grade}`),
+                                                e('td', { className: 'py-3.5 px-5 align-top' },
+                                                    e('span', {
+                                                        className: `px-2 py-0.5 rounded text-[10px] font-semibold ${
+                                                            item.alignment.toLowerCase() === 'observed' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                                                        }`
+                                                    }, item.alignment)
+                                                ),
+                                                e('td', { className: 'py-3.5 px-5 text-gray-500 align-top break-words whitespace-normal' }, item.hqim),
+                                                e('td', { className: 'py-3.5 px-5 text-gray-500 align-top break-words whitespace-normal' }, item.task)
+                                            );
+                                        })
+                                    )
+                                )
+                            ),
+                            e('div', { className: 'p-4 border-t border-gray-100 flex justify-between items-center text-xs text-gray-500' },
+                                e('span', null, `Showing ${filteredData.length} of ${data.length} records`),
+                                e('span', null, `Last synced: ${syncTime}`)
+                            )
+                        )
+                    )
+                )
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(e(App));
+    </script>
+</body>
+</html>
