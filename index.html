@@ -1,0 +1,1452 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APS Leadership and Learning Dashboard</title>
+    
+    <!-- Compiled Tailwind CSS CDN -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chart.js DataLabels Plugin -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+
+    <!-- Leaflet.js Map Library -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- React 18 & React DOM CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.4); border-radius: 3px; }
+        .bg-navy-800 { background-color: #26365a; }
+        .bg-navy-900 { background-color: #1a253e; }
+        .bg-navy-950 { background-color: #101728; }
+        .border-navy-700 { border-color: #234367; }
+        .border-navy-800 { border-color: #26365a; }
+        .text-accent-sky { color: #0ea5e9; }
+        
+        .school-map-marker {
+            display: block;
+            box-shadow: 0 3px 6px -1px rgba(0, 0, 0, 0.35), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+            transition: transform 0.15s ease-in-out;
+            cursor: pointer;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        .school-map-marker:hover {
+            transform: scale(1.35);
+            z-index: 1000 !important;
+        }
+        .marker-circle {
+            border-radius: 9999px;
+        }
+        .marker-diamond {
+            transform: rotate(45deg);
+            border-radius: 2px;
+        }
+        .marker-diamond:hover {
+            transform: rotate(45deg) scale(1.35);
+        }
+        .marker-square {
+            border-radius: 3px;
+        }
+        .marker-triangle {
+            width: 0 !important;
+            height: 0 !important;
+            background-color: transparent !important;
+            border-left: 9px solid transparent !important;
+            border-right: 9px solid transparent !important;
+            border-bottom-width: 16px !important;
+            border-bottom-style: solid !important;
+            border-top: none !important;
+            box-shadow: none !important;
+            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.35));
+            position: relative;
+        }
+        .leaflet-popup-content-wrapper {
+            border-radius: 12px;
+            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.15);
+            padding: 2px;
+        }
+        .school-hover-tooltip {
+            font-family: 'Inter', sans-serif;
+            font-size: 11px;
+            font-weight: 600;
+            color: #0f172a;
+            background: #ffffff;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            box-shadow: 0 4px 10px -1px rgba(0, 0, 0, 0.15), 0 2px 4px -1px rgba(0, 0, 0, 0.1);
+            padding: 3px 8px;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body class="h-full bg-gray-50 text-gray-800 antialiased">
+
+    <div id="root" class="h-full"></div>
+
+    <script>
+        const { useState, useEffect, useMemo, useRef, createElement: e } = React;
+
+        if (typeof ChartDataLabels !== 'undefined') {
+            Chart.register(ChartDataLabels);
+        }
+
+        const FACT_WALKTHROUGHS_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ10aRMr6OzbW9MdPhCen0dXh85qkDw98s8Rwjf0JTPQj5kjjRIl4sqjjDCMaDRrawBJvcqYW-Zd7ui/pub?output=csv';
+        const DIM_SCHOOL_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSsrR_j6JF0QxYAYVb8Fwt9z9QirdZSxsi9i0_Fb7gbAbPPWDxJPX5g3Cy25OoGFLruIM9f2zmQ7BcT/pub?output=csv';
+
+        const DEFAULT_MAP_CENTER = [35.0844, -106.6504];
+        const DEFAULT_MAP_ZOOM = 11;
+
+        const KNOWN_APS_COORDS = {
+            'ecademy': [35.1287, -106.5645],
+            'polk middle': [35.0210, -106.6853],
+            'harrison middle': [35.0112, -106.6698],
+            'ernie pyle middle': [35.0392, -106.6710],
+            'truman middle': [35.0684, -106.7212],
+            'washington middle': [35.0841, -106.6457],
+            'garfield middle': [35.1168, -106.6385],
+            'cleveland middle': [35.1187, -106.5672],
+            'jefferson middle': [35.0845, -106.6041],
+            'wilson middle': [35.0645, -106.5925],
+            'van buren middle': [35.0681, -106.5741],
+            'kennedy middle': [35.1091, -106.5367],
+            'eisenhower middle': [35.1541, -106.5162],
+            'albuquerque high': [35.0872, -106.6335],
+            'highland high': [35.0745, -106.5931],
+            'rio grande high': [35.0224, -106.6874],
+            'west mesa high': [35.0852, -106.7123],
+            'valley high': [35.1325, -106.6455],
+            'del norte high': [35.1378, -106.5872],
+            'eldorado high': [35.1221, -106.4952],
+            'manzano high': [35.0772, -106.5101],
+            'sandia high': [35.1292, -106.5512],
+            'la cueva high': [35.1762, -106.5298],
+            'cibola high': [35.1952, -106.6692],
+            'volcano vista high': [35.1782, -106.7321],
+            'atrisco heritage': [35.0245, -106.7324]
+        };
+
+        function getAlbuquerqueCoordinates(schoolName) {
+            const cleanName = (schoolName || '').toLowerCase();
+            for (const [key, coords] of Object.entries(KNOWN_APS_COORDS)) {
+                if (cleanName.includes(key)) {
+                    return coords;
+                }
+            }
+
+            let hash = 0;
+            const str = schoolName || '';
+            for (let i = 0; i < str.length; i++) {
+                hash = ((hash << 5) - hash) + str.charCodeAt(i);
+                hash |= 0;
+            }
+            const norm1 = Math.abs((hash % 1000) / 1000);
+            const norm2 = Math.abs(((hash >> 3) % 1000) / 1000);
+
+            const lat = 35.02 + norm1 * 0.16;
+            const lng = -106.72 + norm2 * 0.20;
+            return [lat, lng];
+        }
+
+        function getColorByCount(count) {
+            if (count === 0) return '#94a3b8';
+            if (count <= 5) return '#f59e0b';
+            if (count <= 10) return '#0284c7';
+            return '#10b981';
+        }
+
+        function getShapeByLevel(schoolLevel, schoolName) {
+            const lvl = (schoolLevel || '').toLowerCase().trim();
+            const name = (schoolName || '').toLowerCase().trim();
+
+            if (
+                lvl.includes('k-8') || lvl.includes('k8') || lvl.includes('alt') || lvl.includes('special') ||
+                name.includes('k-8') || name.includes('k8') || name.includes('alternative')
+            ) {
+                return 'marker-triangle';
+            }
+
+            if (
+                lvl === 'hs' || lvl === 'h.s.' || lvl.includes('high') || /\bhs\b/.test(lvl) ||
+                name.includes('high school') || /\bhs\b/.test(name) || name.includes(' high')
+            ) {
+                return 'marker-square';
+            }
+
+            if (
+                lvl === 'ms' || lvl === 'm.s.' || lvl.includes('middle') || /\bms\b/.test(lvl) || lvl.includes('junior') ||
+                name.includes('middle school') || name.includes('middle') || /\bms\b/.test(name) || name.includes('junior high')
+            ) {
+                return 'marker-diamond';
+            }
+
+            return 'marker-circle';
+        }
+
+        function App() {
+            const [data, setData] = useState([]);
+            const [schoolDimMap, setSchoolDimMap] = useState({});
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [syncTime, setSyncTime] = useState('Not synced yet');
+            
+            const [walkthroughsExpanded, setWalkthroughsExpanded] = useState(true);
+
+            const [activeDomain, setActiveDomain] = useState('all');
+            const [selectedAlignmentBar, setSelectedAlignmentBar] = useState('all');
+            const [selectedHqimBar, setSelectedHqimBar] = useState('all');
+            const [selectedSchool, setSelectedSchool] = useState('all');
+            const [selectedLevel, setSelectedLevel] = useState('all');
+            const [selectedFramework, setSelectedFramework] = useState('all');
+            const [selectedSupervisor, setSelectedSupervisor] = useState('all');
+            const [selectedGrade, setSelectedGrade] = useState('all');
+
+            const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
+
+            const alignChartRef = useRef(null);
+            const hqimChartRef = useRef(null);
+            const mapContainerRef = useRef(null);
+
+            const alignChartInstance = useRef(null);
+            const hqimChartInstance = useRef(null);
+            const leafletMapInstance = useRef(null);
+            const markersLayerGroup = useRef(null);
+
+            const parseCSV = (text) => {
+                const rows = [];
+                let row = [];
+                let cell = '';
+                let inQuotes = false;
+
+                for (let i = 0; i < text.length; i++) {
+                    const char = text[i];
+                    const nextChar = text[i + 1];
+
+                    if (char === '"') {
+                        if (inQuotes && nextChar === '"') {
+                            cell += '"';
+                            i++;
+                        } else {
+                            inQuotes = !inQuotes;
+                        }
+                    } else if (char === ',' && !inQuotes) {
+                        row.push(cell.trim());
+                        cell = '';
+                    } else if ((char === '\r' || char === '\n') && !inQuotes) {
+                        if (char === '\r' && nextChar === '\n') {
+                            i++;
+                        }
+                        row.push(cell.trim());
+                        rows.push(row);
+                        row = [];
+                        cell = '';
+                    } else {
+                        cell += char;
+                    }
+                }
+                if (cell || row.length > 0) {
+                    row.push(cell.trim());
+                    rows.push(row);
+                }
+                return rows;
+            };
+
+            const fetchAllData = async () => {
+                setLoading(true);
+                setError(null);
+                try {
+                    const [factRes, dimRes] = await Promise.all([
+                        fetch(FACT_WALKTHROUGHS_CSV_URL),
+                        fetch(DIM_SCHOOL_CSV_URL)
+                    ]);
+
+                    if (!factRes.ok) throw new Error(`Fact Table HTTP ${factRes.status}`);
+                    if (!dimRes.ok) throw new Error(`Dim_School HTTP ${dimRes.status}`);
+
+                    const factCsvText = await factRes.text();
+                    const dimCsvText = await dimRes.text();
+
+                    const parsedFactRows = parseCSV(factCsvText);
+                    const parsedDimRows = parseCSV(dimCsvText);
+
+                    const dimMap = {};
+                    if (parsedDimRows.length > 1) {
+                        const dimHeaders = parsedDimRows[0].map(function(h) { return h.trim().toLowerCase(); });
+                        const schoolKeyIdx = dimHeaders.findIndex(function(h) { return (h.includes('school') && !h.includes('level')) || h === 'name'; });
+                        const locIdIdx = dimHeaders.findIndex(function(h) { return h.includes('locationid') || h.includes('location id') || h.includes('location'); });
+                        const levelIdx = dimHeaders.findIndex(function(h) { return h.includes('school level') || h.includes('level'); });
+                        const frameworkIdx = dimHeaders.findIndex(function(h) { return h.includes('performance framework') || h.includes('framework') || h.includes('aps performance'); });
+                        const supervisorIdx = dimHeaders.findIndex(function(h) { return h.includes('supervisor'); });
+                        const latIdx = dimHeaders.findIndex(function(h) { return h === 'latitude' || h === 'lat' || h.includes('latitude'); });
+                        const lngIdx = dimHeaders.findIndex(function(h) { return h === 'longitude' || h === 'lon' || h === 'lng' || h.includes('longitude'); });
+
+                        parsedDimRows.slice(1).forEach(function(r) {
+                            const schoolName = r[schoolKeyIdx >= 0 ? schoolKeyIdx : 0];
+                            if (schoolName) {
+                                const rawAddress = 'Albuquerque, NM';
+                                
+                                let coords = null;
+                                if (latIdx >= 0 && lngIdx >= 0 && r[latIdx] && r[lngIdx]) {
+                                    const parsedLat = parseFloat(r[latIdx]);
+                                    const parsedLng = parseFloat(r[lngIdx]);
+                                    if (!isNaN(parsedLat) && !isNaN(parsedLng)) {
+                                        coords = [parsedLat, parsedLng];
+                                    }
+                                }
+                                if (!coords) {
+                                    coords = getAlbuquerqueCoordinates(schoolName);
+                                }
+
+                                dimMap[schoolName.trim()] = {
+                                    rawRow: r,
+                                    schoolName: schoolName.trim(),
+                                    locationId: (locIdIdx >= 0 ? r[locIdIdx] : '') || 'N/A',
+                                    schoolLevel: (levelIdx >= 0 ? r[levelIdx] : '') || 'N/A',
+                                    performanceFramework: (frameworkIdx >= 0 ? r[frameworkIdx] : '') || 'N/A',
+                                    supervisor: (supervisorIdx >= 0 ? r[supervisorIdx] : '') || 'N/A',
+                                    coordinates: coords
+                                };
+                            }
+                        });
+                    }
+                    setSchoolDimMap(dimMap);
+
+                    if (parsedFactRows.length < 2) throw new Error('Walkthrough Fact CSV appears empty.');
+
+                    const factHeaders = parsedFactRows[0].map(function(h) { return h.trim().toLowerCase(); });
+                    const domainIdx = factHeaders.findIndex(function(h) { return h.includes('domain') || h.includes('subject'); });
+                    const schoolIdx = factHeaders.findIndex(function(h) { return h.includes('school'); });
+                    const dateIdx = factHeaders.findIndex(function(h) { return h.includes('date') || h.includes('timestamp'); });
+                    const gradeIdx = factHeaders.findIndex(function(h) { return h.includes('grade level') || h.includes('grade'); });
+                    const alignIdx = factHeaders.findIndex(function(h) { return h.includes('standard') || h.includes('alignment'); });
+                    const hqimIdx = factHeaders.findIndex(function(h) { return h.includes('hqim') || h.includes('materials'); });
+                    const taskIdx = factHeaders.findIndex(function(h) { return h.includes('task') || h.includes('observed') || h.includes('lesson'); });
+
+                    const formatted = parsedFactRows.slice(1)
+                        .filter(function(r) {
+                            const hasValues = r.some(function(cell) { return cell.length > 0; });
+                            const isHeaderRow = r[0] && r[0].toLowerCase().includes('subject domain');
+                            return hasValues && !isHeaderRow;
+                        })
+                        .map(function(r, i) {
+                            const rawDomain = (domainIdx >= 0 ? r[domainIdx] : r[0]) || '';
+                            let domain = 'Other';
+                            
+                            if (rawDomain.toLowerCase().includes('math')) {
+                                domain = 'Math';
+                            } else if (rawDomain.toLowerCase().includes('literacy')) {
+                                domain = 'Early Literacy';
+                            }
+
+                            const schoolName = (schoolIdx >= 0 ? r[schoolIdx] : r[1]) || 'N/A';
+                            const dimData = dimMap[schoolName.trim()] || {};
+
+                            return {
+                                id: i + 1,
+                                domain: domain,
+                                school: schoolName,
+                                locationId: dimData.locationId || 'N/A',
+                                schoolLevel: dimData.schoolLevel || 'N/A',
+                                performanceFramework: dimData.performanceFramework || 'N/A',
+                                supervisor: dimData.supervisor || 'N/A',
+                                coordinates: dimData.coordinates || getAlbuquerqueCoordinates(schoolName),
+                                date: (dateIdx >= 0 ? r[dateIdx] : '') || 'N/A',
+                                grade: (gradeIdx >= 0 ? r[gradeIdx] : r[2]) || 'N/A',
+                                alignment: (alignIdx >= 0 ? r[alignIdx] : r[4]) || 'Unable to Determine',
+                                hqim: (hqimIdx >= 0 ? r[hqimIdx] : r[5]) || 'Not Observed',
+                                task: (taskIdx >= 0 ? r[taskIdx] : r[6]) || 'N/A'
+                            };
+                        })
+                        .filter(function(item) { return item.domain === 'Math' || item.domain === 'Early Literacy'; });
+
+                    setData(formatted);
+                    setSyncTime(new Date().toLocaleTimeString());
+                } catch (err) {
+                    console.error("Star Schema Data Fetch Error:", err);
+                    setError(err.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            useEffect(function() {
+                fetchAllData();
+                const interval = setInterval(fetchAllData, 900000);
+                return function() { clearInterval(interval); };
+            }, []);
+
+            const schoolsList = useMemo(function() {
+                const combined = Object.keys(schoolDimMap).length > 0 ? Object.keys(schoolDimMap) : data.map(function(d) { return d.school; });
+                return [...new Set(combined)].filter(function(s) { return s && s !== 'N/A'; }).sort();
+            }, [data, schoolDimMap]);
+
+            const levelsList = useMemo(function() {
+                const dimLevels = Object.values(schoolDimMap).map(function(s) { return s.schoolLevel; });
+                const factLevels = data.map(function(d) { return d.schoolLevel; });
+                return [...new Set([...dimLevels, ...factLevels])].filter(function(l) { return l && l !== 'N/A'; }).sort();
+            }, [data, schoolDimMap]);
+
+            const frameworksList = useMemo(function() {
+                const dimFrameworks = Object.values(schoolDimMap).map(function(s) { return s.performanceFramework; });
+                const factFrameworks = data.map(function(d) { return d.performanceFramework; });
+                return [...new Set([...dimFrameworks, ...factFrameworks])].filter(function(f) { return f && f !== 'N/A'; }).sort();
+            }, [data, schoolDimMap]);
+
+            const supervisorsList = useMemo(function() {
+                const dimSupervisors = Object.values(schoolDimMap).map(function(s) { return s.supervisor; });
+                const factSupervisors = data.map(function(d) { return d.supervisor; });
+                return [...new Set([...dimSupervisors, ...factSupervisors])].filter(function(s) { return s && s !== 'N/A'; }).sort();
+            }, [data, schoolDimMap]);
+
+            const gradesList = useMemo(function() {
+                const uniqueGrades = [...new Set(data.map(function(d) { return d.grade; }))].filter(function(g) { return g && g !== 'N/A'; });
+                return uniqueGrades.sort(function(a, b) {
+                    const numA = parseFloat(a.replace(/[^0-9.]/g, ''));
+                    const numB = parseFloat(b.replace(/[^0-9.]/g, ''));
+                    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+                    return a.localeCompare(b);
+                });
+            }, [data]);
+
+            // Base filtered data respecting top-bar switches, dropdown filters, AND interactive bar clicks across all components
+            const filteredData = useMemo(function() {
+                return data.filter(function(item) {
+                    const matchesDomain = activeDomain === 'all' || item.domain === activeDomain;
+                    const matchesSchool = selectedSchool === 'all' || item.school === selectedSchool;
+                    const matchesLevel = selectedLevel === 'all' || item.schoolLevel === selectedLevel;
+                    const matchesFramework = selectedFramework === 'all' || item.performanceFramework === selectedFramework;
+                    const matchesSupervisor = selectedSupervisor === 'all' || item.supervisor === selectedSupervisor;
+                    const matchesGrade = selectedGrade === 'all' || item.grade === selectedGrade;
+
+                    let matchesAlignBar = true;
+                    const alignLower = item.alignment.toLowerCase().trim();
+                    if (selectedAlignmentBar === 'Observed') {
+                        matchesAlignBar = alignLower === 'observed';
+                    } else if (selectedAlignmentBar === 'Partially Observed') {
+                        matchesAlignBar = alignLower.includes('partial');
+                    } else if (selectedAlignmentBar === 'Other / Not Observed') {
+                        matchesAlignBar = !alignLower.includes('observed') || alignLower.includes('not');
+                    }
+
+                    let matchesHqimBar = true;
+                    const hqimLower = item.hqim.toLowerCase().trim();
+                    if (selectedHqimBar === 'Observed') {
+                        matchesHqimBar = hqimLower === 'observed';
+                    } else if (selectedHqimBar === 'Partially Observed') {
+                        matchesHqimBar = hqimLower.includes('partial');
+                    } else if (selectedHqimBar === 'Other / Not Observed') {
+                        matchesHqimBar = !hqimLower.includes('observed') || hqimLower.includes('not observed') || hqimLower.includes('unable') || hqimLower === 'n/a' || !hqimLower;
+                    }
+
+                    return matchesDomain && matchesSchool && matchesLevel && matchesFramework && matchesSupervisor && matchesGrade && matchesAlignBar && matchesHqimBar;
+                });
+            }, [data, activeDomain, selectedSchool, selectedLevel, selectedFramework, selectedSupervisor, selectedGrade, selectedAlignmentBar, selectedHqimBar]);
+
+            const sortedData = useMemo(function() {
+                if (!sortConfig.key) return filteredData;
+                const sorted = [...filteredData].sort(function(a, b) {
+                    let valA = a[sortConfig.key] || '';
+                    let valB = b[sortConfig.key] || '';
+
+                    if (sortConfig.key === 'grade') {
+                        const numA = parseFloat(String(valA).replace(/[^0-9.]/g, ''));
+                        const numB = parseFloat(String(valB).replace(/[^0-9.]/g, ''));
+                        if (!isNaN(numA) && !isNaN(numB)) {
+                            return sortConfig.direction === 'asc' ? numA - numB : numB - numA;
+                        }
+                    }
+
+                    if (sortConfig.key === 'date') {
+                        const dateA = new Date(valA).getTime();
+                        const dateB = new Date(valB).getTime();
+                        if (!isNaN(dateA) && !isNaN(dateB)) {
+                            return sortConfig.direction === 'asc' ? dateA - dateB : dateB - dateA;
+                        }
+                    }
+
+                    valA = String(valA).toLowerCase();
+                    valB = String(valB).toLowerCase();
+                    return sortConfig.direction === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                });
+                return sorted;
+            }, [filteredData, sortConfig]);
+
+            const handleSort = function(key) {
+                setSortConfig(function(prev) {
+                    if (prev.key === key) {
+                        return { key: key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+                    }
+                    return { key: key, direction: 'asc' };
+                });
+            };
+
+            const renderSortIcon = function(key) {
+                if (sortConfig.key !== key) {
+                    return e('i', { className: 'fa-solid fa-sort text-gray-300 ml-1.5 text-[10px] flex-shrink-0' });
+                }
+                return sortConfig.direction === 'asc'
+                    ? e('i', { className: 'fa-solid fa-sort-up text-blue-600 ml-1.5 text-[10px] flex-shrink-0' })
+                    : e('i', { className: 'fa-solid fa-sort-down text-blue-600 ml-1.5 text-[10px] flex-shrink-0' });
+            };
+
+            // KPI Metrics responsive to all active filters
+            const metrics = useMemo(function() {
+                const total = filteredData.length;
+                const alignObserved = filteredData.filter(function(w) { 
+                    return w.alignment.toLowerCase().trim() === 'observed'; 
+                }).length;
+                const alignPct = total > 0 ? Math.round((alignObserved / total) * 100) : 0;
+
+                const hqimObserved = filteredData.filter(function(w) { 
+                    return w.hqim.toLowerCase().trim() === 'observed'; 
+                }).length;
+                const hqimPct = total > 0 ? Math.round((hqimObserved / total) * 100) : 0;
+
+                const dimSchools = Object.values(schoolDimMap);
+                const eligibleDimSchools = dimSchools.length > 0 ? dimSchools.filter(function(sch) {
+                    const matchesSchool = selectedSchool === 'all' || sch.schoolName === selectedSchool;
+                    const matchesLevel = selectedLevel === 'all' || sch.schoolLevel === selectedLevel;
+                    const matchesFramework = selectedFramework === 'all' || sch.performanceFramework === selectedFramework;
+                    const matchesSupervisor = selectedSupervisor === 'all' || sch.supervisor === selectedSupervisor;
+                    return matchesSchool && matchesLevel && matchesFramework && matchesSupervisor;
+                }) : [];
+
+                const uniqueSchoolsObserved = new Set(filteredData.map(function(w) { return w.school; })).size;
+                const totalPossibleSchools = eligibleDimSchools.length > 0 
+                    ? eligibleDimSchools.length 
+                    : (Object.keys(schoolDimMap).length > 0 ? Object.keys(schoolDimMap).length : uniqueSchoolsObserved);
+
+                return { 
+                    total, 
+                    alignPct, 
+                    hqimPct, 
+                    uniqueSchools: uniqueSchoolsObserved, 
+                    totalPossibleSchools 
+                };
+            }, [filteredData, schoolDimMap, selectedSchool, selectedLevel, selectedFramework, selectedSupervisor]);
+
+            // Chart base data respects all filters EXCEPT the chart's own bar selection (prevents chart collapse when clicked)
+            const alignChartBaseData = useMemo(function() {
+                return data.filter(function(item) {
+                    const matchesDomain = activeDomain === 'all' || item.domain === activeDomain;
+                    const matchesSchool = selectedSchool === 'all' || item.school === selectedSchool;
+                    const matchesLevel = selectedLevel === 'all' || item.schoolLevel === selectedLevel;
+                    const matchesFramework = selectedFramework === 'all' || item.performanceFramework === selectedFramework;
+                    const matchesSupervisor = selectedSupervisor === 'all' || item.supervisor === selectedSupervisor;
+                    const matchesGrade = selectedGrade === 'all' || item.grade === selectedGrade;
+
+                    let matchesHqimBar = true;
+                    const hqimLower = item.hqim.toLowerCase().trim();
+                    if (selectedHqimBar === 'Observed') {
+                        matchesHqimBar = hqimLower === 'observed';
+                    } else if (selectedHqimBar === 'Partially Observed') {
+                        matchesHqimBar = hqimLower.includes('partial');
+                    } else if (selectedHqimBar === 'Other / Not Observed') {
+                        matchesHqimBar = !hqimLower.includes('observed') || hqimLower.includes('not observed') || hqimLower.includes('unable') || hqimLower === 'n/a' || !hqimLower;
+                    }
+
+                    return matchesDomain && matchesSchool && matchesLevel && matchesFramework && matchesSupervisor && matchesGrade && matchesHqimBar;
+                });
+            }, [data, activeDomain, selectedSchool, selectedLevel, selectedFramework, selectedSupervisor, selectedGrade, selectedHqimBar]);
+
+            const hqimChartBaseData = useMemo(function() {
+                return data.filter(function(item) {
+                    const matchesDomain = activeDomain === 'all' || item.domain === activeDomain;
+                    const matchesSchool = selectedSchool === 'all' || item.school === selectedSchool;
+                    const matchesLevel = selectedLevel === 'all' || item.schoolLevel === selectedLevel;
+                    const matchesFramework = selectedFramework === 'all' || item.performanceFramework === selectedFramework;
+                    const matchesSupervisor = selectedSupervisor === 'all' || item.supervisor === selectedSupervisor;
+                    const matchesGrade = selectedGrade === 'all' || item.grade === selectedGrade;
+
+                    let matchesAlignBar = true;
+                    const alignLower = item.alignment.toLowerCase().trim();
+                    if (selectedAlignmentBar === 'Observed') {
+                        matchesAlignBar = alignLower === 'observed';
+                    } else if (selectedAlignmentBar === 'Partially Observed') {
+                        matchesAlignBar = alignLower.includes('partial');
+                    } else if (selectedAlignmentBar === 'Other / Not Observed') {
+                        matchesAlignBar = !alignLower.includes('observed') || alignLower.includes('not');
+                    }
+
+                    return matchesDomain && matchesSchool && matchesLevel && matchesFramework && matchesSupervisor && matchesGrade && matchesAlignBar;
+                });
+            }, [data, activeDomain, selectedSchool, selectedLevel, selectedFramework, selectedSupervisor, selectedGrade, selectedAlignmentBar]);
+
+            // Chart Rendering Logic - synchronized to shared y-axis scale, identical label formats
+            useEffect(function() {
+                if (!alignChartRef.current || !hqimChartRef.current) return;
+
+                const alignTotal = alignChartBaseData.length;
+                const alignObserved = alignChartBaseData.filter(function(w) { return w.alignment.toLowerCase().trim() === 'observed'; }).length;
+                const alignPartial = alignChartBaseData.filter(function(w) { return w.alignment.toLowerCase().includes('partial'); }).length;
+                const alignOther = Math.max(0, alignTotal - (alignObserved + alignPartial));
+
+                const hqimTotal = hqimChartBaseData.length;
+                const hqimObserved = hqimChartBaseData.filter(function(w) { return w.hqim.toLowerCase().trim() === 'observed'; }).length;
+                const hqimPartial = hqimChartBaseData.filter(function(w) { return w.hqim.toLowerCase().includes('partial'); }).length;
+                const hqimOther = Math.max(0, hqimTotal - (hqimObserved + hqimPartial));
+
+                const highestBarValue = Math.max(
+                    alignObserved, alignPartial, alignOther,
+                    hqimObserved, hqimPartial, hqimOther,
+                    1
+                );
+                const sharedYAxisMax = Math.ceil(highestBarValue * 1.25);
+
+                const chartLabels = ['Observed', 'Partially Observed', 'Other / Not Observed'];
+
+                if (alignChartInstance.current) alignChartInstance.current.destroy();
+                
+                alignChartInstance.current = new Chart(alignChartRef.current, {
+                    type: 'bar',
+                    data: {
+                        labels: chartLabels,
+                        datasets: [{
+                            data: [alignObserved, alignPartial, alignOther],
+                            backgroundColor: function(context) {
+                                const idx = context.dataIndex;
+                                if (selectedAlignmentBar !== 'all' && selectedAlignmentBar !== chartLabels[idx]) {
+                                    return ['#10b98140', '#f59e0b40', '#64748b40'][idx];
+                                }
+                                return ['#10b981', '#f59e0b', '#64748b'][idx];
+                            },
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        onClick: function(event, elements) {
+                            if (elements && elements.length > 0) {
+                                const index = elements[0].index;
+                                const clickedLabel = chartLabels[index];
+                                setSelectedAlignmentBar(function(prev) {
+                                    return prev === clickedLabel ? 'all' : clickedLabel;
+                                });
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            datalabels: {
+                                anchor: 'end',
+                                align: 'top',
+                                offset: 2,
+                                font: { weight: 'bold', size: 11 },
+                                color: '#334155',
+                                formatter: function(value) {
+                                    if (value === 0) return '';
+                                    const pct = alignTotal > 0 ? Math.round((value / alignTotal) * 100) : 0;
+                                    return `${value} (${pct}%)`;
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                min: 0,
+                                max: sharedYAxisMax,
+                                ticks: { precision: 0 }
+                            }
+                        }
+                    }
+                });
+
+                if (hqimChartInstance.current) hqimChartInstance.current.destroy();
+                hqimChartInstance.current = new Chart(hqimChartRef.current, {
+                    type: 'bar',
+                    data: {
+                        labels: chartLabels,
+                        datasets: [{
+                            data: [hqimObserved, hqimPartial, hqimOther],
+                            backgroundColor: function(context) {
+                                const idx = context.dataIndex;
+                                if (selectedHqimBar !== 'all' && selectedHqimBar !== chartLabels[idx]) {
+                                    return ['#0ea5e940', '#f59e0b40', '#64748b40'][idx];
+                                }
+                                return ['#0ea5e9', '#f59e0b', '#64748b'][idx];
+                            },
+                            borderRadius: 6
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        onClick: function(event, elements) {
+                            if (elements && elements.length > 0) {
+                                const index = elements[0].index;
+                                const clickedLabel = chartLabels[index];
+                                setSelectedHqimBar(function(prev) {
+                                    return prev === clickedLabel ? 'all' : clickedLabel;
+                                });
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            datalabels: {
+                                anchor: 'end',
+                                align: 'top',
+                                offset: 2,
+                                font: { weight: 'bold', size: 11 },
+                                color: '#334155',
+                                formatter: function(value) {
+                                    if (value === 0) return '';
+                                    const pct = hqimTotal > 0 ? Math.round((value / hqimTotal) * 100) : 0;
+                                    return `${value} (${pct}%)`;
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                min: 0,
+                                max: sharedYAxisMax,
+                                ticks: { precision: 0 }
+                            }
+                        }
+                    }
+                });
+
+            }, [alignChartBaseData, hqimChartBaseData, selectedAlignmentBar, selectedHqimBar]);
+
+            // OpenStreetMap basemap with hover tooltips displaying the school name and filtered strictly by all criteria including chart bar selections
+            useEffect(function() {
+                if (!mapContainerRef.current) return;
+
+                if (!leafletMapInstance.current) {
+                    const map = L.map(mapContainerRef.current, {
+                        center: DEFAULT_MAP_CENTER,
+                        zoom: DEFAULT_MAP_ZOOM,
+                        zoomControl: false
+                    });
+
+                    L.control.zoom({ position: 'topleft' }).addTo(map);
+
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                        maxZoom: 19
+                    }).addTo(map);
+
+                    markersLayerGroup.current = L.layerGroup().addTo(map);
+                    leafletMapInstance.current = map;
+                }
+
+                const map = leafletMapInstance.current;
+                const markersGroup = markersLayerGroup.current;
+                markersGroup.clearLayers();
+
+                const countsMap = {};
+                filteredData.forEach(function(item) {
+                    if (!item.school || item.school === 'N/A') return;
+                    countsMap[item.school] = (countsMap[item.school] || 0) + 1;
+                });
+
+                // When bar filters are active, map displays schools that match the bar filter observation criteria
+                const isBarFilterActive = selectedAlignmentBar !== 'all' || selectedHqimBar !== 'all';
+                const allKnownSchoolNames = isBarFilterActive
+                    ? Object.keys(countsMap)
+                    : (Object.keys(schoolDimMap).length > 0 ? Object.keys(schoolDimMap) : Object.keys(countsMap));
+
+                const bounds = [];
+                let selectedSchoolCoordinates = null;
+
+                allKnownSchoolNames.forEach(function(schoolName) {
+                    const dimInfo = schoolDimMap[schoolName] || {};
+                    const schoolLevel = dimInfo.schoolLevel || 'N/A';
+                    const performanceFramework = dimInfo.performanceFramework || 'N/A';
+                    const supervisor = dimInfo.supervisor || 'N/A';
+                    const coordinates = dimInfo.coordinates || getAlbuquerqueCoordinates(schoolName);
+
+                    if (selectedSchool !== 'all' && selectedSchool !== schoolName) return;
+                    if (selectedLevel !== 'all' && schoolLevel !== selectedLevel) return;
+                    if (selectedFramework !== 'all' && performanceFramework !== selectedFramework) return;
+                    if (selectedSupervisor !== 'all' && supervisor !== selectedSupervisor) return;
+
+                    const count = countsMap[schoolName] || 0;
+                    bounds.push(coordinates);
+
+                    if (selectedSchool === schoolName) {
+                        selectedSchoolCoordinates = coordinates;
+                    }
+
+                    const shapeClass = getShapeByLevel(schoolLevel, schoolName);
+                    const pinBg = getColorByCount(count);
+                    const isSelected = selectedSchool === schoolName;
+                    const borderStyle = isSelected ? '3px solid #0f172a' : '2px solid #ffffff';
+
+                    let markerHtml = '';
+                    if (shapeClass === 'marker-triangle') {
+                        markerHtml = `
+                            <div class="school-map-marker ${shapeClass}" style="
+                                border-bottom-color: ${pinBg} !important;
+                                ${isSelected ? 'filter: drop-shadow(0 0 6px #0f172a); transform: scale(1.35);' : ''}
+                            "></div>
+                        `;
+                    } else if (shapeClass === 'marker-diamond') {
+                        markerHtml = `
+                            <div class="school-map-marker ${shapeClass}" style="
+                                background-color: ${pinBg};
+                                width: ${isSelected ? '18px' : '14px'};
+                                height: ${isSelected ? '18px' : '14px'};
+                                border: ${borderStyle};
+                                margin: ${isSelected ? '2px' : '3px'} auto;
+                            "></div>
+                        `;
+                    } else if (shapeClass === 'marker-square') {
+                        markerHtml = `
+                            <div class="school-map-marker ${shapeClass}" style="
+                                background-color: ${pinBg};
+                                width: ${isSelected ? '19px' : '15px'};
+                                height: ${isSelected ? '19px' : '15px'};
+                                border: ${borderStyle};
+                                margin: ${isSelected ? '1px' : '2px'} auto;
+                            "></div>
+                        `;
+                    } else {
+                        markerHtml = `
+                            <div class="school-map-marker ${shapeClass}" style="
+                                background-color: ${pinBg};
+                                width: ${isSelected ? '20px' : '16px'};
+                                height: ${isSelected ? '20px' : '16px'};
+                                border: ${borderStyle};
+                                margin: ${isSelected ? '1px' : '2px'} auto;
+                            "></div>
+                        `;
+                    }
+
+                    const customIcon = L.divIcon({
+                        className: 'custom-leaflet-pin',
+                        html: markerHtml,
+                        iconSize: [22, 22],
+                        iconAnchor: [11, 11]
+                    });
+
+                    const marker = L.marker(coordinates, { icon: customIcon });
+
+                    marker.bindTooltip(schoolName, {
+                        direction: 'top',
+                        offset: [0, -10],
+                        className: 'school-hover-tooltip'
+                    });
+
+                    const coordStr = `${coordinates[0].toFixed(4)}°, ${coordinates[1].toFixed(4)}°`;
+                    const popupContent = `
+                        <div style="font-family: 'Inter', sans-serif; font-size: 12px; color: #1e293b; min-width: 210px;">
+                            <div style="font-weight: 700; font-size: 13px; color: #0f172a; margin-bottom: 2px;">${schoolName}</div>
+                            <div style="color: #64748b; font-size: 11px; margin-bottom: 6px;">
+                                <i class="fa-solid fa-location-crosshairs" style="margin-right: 4px; color: #94a3b8;"></i>${coordStr}
+                            </div>
+                            <div style="background-color: #f8fafc; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0; font-size: 11px; margin-bottom: 6px;">
+                                <div><strong style="color: #475569;">School Type:</strong> ${schoolLevel}</div>
+                                <div><strong style="color: #475569;">Framework:</strong> ${performanceFramework}</div>
+                                <div><strong style="color: #475569;">Supervisor:</strong> ${supervisor}</div>
+                                <div style="margin-top: 4px; font-weight: 700; color: ${count > 0 ? '#0f172a' : '#64748b'};">
+                                    Walkthroughs Conducted: <span style="color: ${pinBg};">${count}</span>
+                                </div>
+                            </div>
+                            <div style="text-align: right;">
+                                <span style="font-size: 10px; color: #2563eb; font-weight: 600; cursor: pointer;">
+                                    ${selectedSchool === schoolName ? 'Unselect to reset map view &rarr;' : 'Filter by this school &rarr;'}
+                                </span>
+                            </div>
+                        </div>
+                    `;
+
+                    marker.bindPopup(popupContent);
+                    marker.on('click', function() {
+                        setSelectedSchool(function(prev) {
+                            return prev === schoolName ? 'all' : schoolName;
+                        });
+                    });
+
+                    markersGroup.addLayer(marker);
+                });
+
+                if (selectedSchool !== 'all' && selectedSchoolCoordinates) {
+                    map.flyTo(selectedSchoolCoordinates, 14, { duration: 0.8 });
+                } else {
+                    map.closePopup();
+                    if (bounds.length > 0) {
+                        map.flyToBounds(bounds, { padding: [35, 35], duration: 0.8 });
+                    } else {
+                        map.flyTo(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, { duration: 0.8 });
+                    }
+                }
+
+                setTimeout(function() {
+                    map.invalidateSize();
+                }, 200);
+
+            }, [filteredData, selectedSchool, selectedLevel, selectedFramework, selectedSupervisor, selectedAlignmentBar, selectedHqimBar, schoolDimMap]);
+
+            const litTotal = useMemo(function() { return data.filter(function(d) { return d.domain === 'Early Literacy'; }).length; }, [data]);
+            const mathTotal = useMemo(function() { return data.filter(function(d) { return d.domain === 'Math'; }).length; }, [data]);
+
+            const activeFilteredSitesCount = useMemo(function() {
+                const isBarFilterActive = selectedAlignmentBar !== 'all' || selectedHqimBar !== 'all';
+                if (isBarFilterActive) {
+                    return new Set(filteredData.map(function(d) { return d.school; })).size;
+                }
+                const dimSchools = Object.values(schoolDimMap);
+                if (dimSchools.length === 0) return metrics.uniqueSchools;
+                return dimSchools.filter(function(sch) {
+                    const matchesSchool = selectedSchool === 'all' || sch.schoolName === selectedSchool;
+                    const matchesLevel = selectedLevel === 'all' || sch.schoolLevel === selectedLevel;
+                    const matchesFramework = selectedFramework === 'all' || sch.performanceFramework === selectedFramework;
+                    const matchesSupervisor = selectedSupervisor === 'all' || sch.supervisor === selectedSupervisor;
+                    return matchesSchool && matchesLevel && matchesFramework && matchesSupervisor;
+                }).length;
+            }, [filteredData, schoolDimMap, selectedSchool, selectedLevel, selectedFramework, selectedSupervisor, selectedAlignmentBar, selectedHqimBar, metrics.uniqueSchools]);
+
+            const handleParentWalkthroughClick = function() {
+                setActiveDomain('all');
+                setWalkthroughsExpanded(!walkthroughsExpanded);
+            };
+
+            const activeMenuTitle = useMemo(function() {
+                if (activeDomain === 'Early Literacy') return 'Early Literacy';
+                if (activeDomain === 'Math') return 'Math';
+                return 'Instructional Walkthroughs';
+            }, [activeDomain]);
+
+            return e('div', { className: 'flex h-screen overflow-hidden' },
+                e('aside', { className: 'w-64 bg-navy-800 text-white flex flex-col flex-shrink-0 shadow-2xl' },
+                    e('div', { className: 'py-4 px-6 bg-navy-900 border-b border-navy-700 min-h-16 flex items-center' },
+                        e('div', { className: 'flex items-center space-x-3 w-full' },
+                            e('div', { className: 'w-9 h-9 rounded-xl bg-blue-500 flex items-center justify-center shadow-lg flex-shrink-0' },
+                                e('i', { className: 'fa-solid fa-graduation-cap text-white text-lg' })
+                            ),
+                            e('div', { className: 'flex-1' },
+                                e('span', { className: 'font-bold text-sm leading-tight text-white block break-words' }, 'APS Leadership & Learning Dashboard')
+                            )
+                        )
+                    ),
+                    e('div', { className: 'flex-1 overflow-y-auto px-4 py-6 space-y-6' },
+                        e('div', null,
+                            e('p', { className: 'px-3 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3' }, 'Navigation'),
+                            e('nav', { className: 'space-y-1' },
+                                e('button', {
+                                    onClick: handleParentWalkthroughClick,
+                                    className: `w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeDomain === 'all' ? 'bg-blue-900 text-white border-l-4 border-blue-400' : 'text-gray-300 hover:bg-navy-700'}`
+                                },
+                                    e('span', { className: 'flex items-center space-x-2.5 overflow-hidden' },
+                                        e('i', { className: `fa-solid fa-chevron-${walkthroughsExpanded ? 'down' : 'right'} text-xs text-gray-400 w-3` }),
+                                        e('i', { className: 'fa-solid fa-clipboard-list text-blue-400 w-4' }),
+                                        e('span', { className: 'truncate font-semibold' }, 'Instructional Walkthroughs')
+                                    ),
+                                    e('span', { className: 'text-xs bg-navy-900 px-2 py-0.5 rounded-full font-bold ml-1' }, data.length)
+                                ),
+                                walkthroughsExpanded && e('div', { className: 'pl-6 space-y-1 mt-1 border-l-2 border-navy-700 ml-3' },
+                                    e('button', {
+                                        onClick: function() { setActiveDomain('Early Literacy'); },
+                                        className: `w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${activeDomain === 'Early Literacy' ? 'bg-purple-900/80 text-white font-bold' : 'text-gray-300 hover:bg-navy-700'}`
+                                    },
+                                        e('span', { className: 'flex items-center space-x-2' },
+                                            e('i', { className: 'fa-solid fa-book-open text-purple-400 w-4' }),
+                                            e('span', null, 'Early Literacy')
+                                        ),
+                                        e('span', { className: 'text-[10px] bg-navy-900 px-1.5 py-0.5 rounded-full font-semibold' }, litTotal)
+                                    ),
+                                    e('button', {
+                                        onClick: function() { setActiveDomain('Math'); },
+                                        className: `w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${activeDomain === 'Math' ? 'bg-green-900/80 text-white font-bold' : 'text-gray-300 hover:bg-navy-700'}`
+                                    },
+                                        e('span', { className: 'flex items-center space-x-2' },
+                                            e('i', { className: 'fa-solid fa-calculator text-green-400 w-4' }),
+                                            e('span', null, 'Math')
+                                        ),
+                                        e('span', { className: 'text-[10px] bg-navy-900 px-1.5 py-0.5 rounded-full font-semibold' }, mathTotal)
+                                    )
+                                )
+                            )
+                        )
+                    ),
+                    e('div', { className: 'p-4 bg-navy-900 border-t border-navy-700 text-xs text-gray-400' },
+                        e('p', { className: 'font-semibold text-gray-300' }, 'Connected Dimensions'),
+                        e('p', { className: 'text-gray-400 mt-0.5' }, `Dim_School (${Object.keys(schoolDimMap).length} sites loaded)`)
+                    )
+                ),
+                e('div', { className: 'flex-1 flex flex-col h-full overflow-hidden' },
+                    e('header', { className: 'h-16 bg-white border-b border-gray-200 px-8 flex items-center justify-between z-10' },
+                        e('div', null,
+                            e('h1', { className: 'text-lg font-bold text-gray-800 leading-none' },
+                                activeMenuTitle
+                            ),
+                            e('span', { className: 'text-xs text-gray-500 mt-1 block' },
+                                activeDomain === 'all' ? 'Instructional Walkthroughs Overview (Combined)' : `${activeDomain} Walkthrough Domain View`
+                            )
+                        ),
+                        e('div', { className: 'flex items-center space-x-4' },
+                            e('div', { className: 'inline-flex p-1 bg-gray-100 rounded-xl border border-gray-200 text-xs font-semibold' },
+                                e('button', {
+                                    onClick: function() { setActiveDomain('all'); },
+                                    className: `px-3 py-1.5 rounded-lg transition-all ${activeDomain === 'all' ? 'bg-white text-navy-900 shadow-sm font-bold' : 'text-gray-600 hover:text-gray-900'}`
+                                }, 'Combined'),
+                                e('button', {
+                                    onClick: function() { setActiveDomain('Early Literacy'); },
+                                    className: `px-3 py-1.5 rounded-lg transition-all ${activeDomain === 'Early Literacy' ? 'bg-purple-600 text-white shadow-sm font-bold' : 'text-gray-600 hover:text-gray-900'}`
+                                }, 'Early Literacy'),
+                                e('button', {
+                                    onClick: function() { setActiveDomain('Math'); },
+                                    className: `px-3 py-1.5 rounded-lg transition-all ${activeDomain === 'Math' ? 'bg-green-600 text-white shadow-sm font-bold' : 'text-gray-600 hover:text-gray-900'}`
+                                }, 'Math')
+                            ),
+                            e('button', { onClick: fetchAllData, className: 'flex items-center space-x-2 bg-navy-800 hover:bg-navy-900 text-white text-xs px-3.5 py-2 rounded-lg font-medium transition shadow-sm' },
+                                e('i', { className: 'fa-solid fa-rotate-right' }),
+                                e('span', null, 'Sync Tables')
+                            )
+                        )
+                    ),
+                    e('main', { className: 'flex-1 overflow-y-auto p-6 space-y-6' },
+                        error && e('div', { className: 'p-4 rounded-xl text-xs font-medium bg-red-100 text-red-700 border border-red-200' },
+                            e('i', { className: 'fa-solid fa-triangle-exclamation mr-2' }),
+                            e('span', null, `Data Error: ${error}`)
+                        ),
+                        // 1. KPI Scorecards
+                        e('div', { className: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4' },
+                            e('div', { className: 'bg-white p-5 rounded-2xl border border-gray-200 shadow-sm' },
+                                e('span', { className: 'text-xs font-semibold uppercase text-gray-400' }, 'Total Observations'),
+                                e('div', { className: 'text-2xl font-bold mt-2 text-gray-800' }, loading ? '--' : metrics.total)
+                            ),
+                            e('div', { className: 'bg-white p-5 rounded-2xl border border-gray-200 shadow-sm' },
+                                e('span', { className: 'text-xs font-semibold uppercase text-gray-400' }, 'GRADE-LEVEL STANDARDS'),
+                                e('div', { className: 'text-2xl font-bold mt-2 text-green-600' }, loading ? '--%' : `${metrics.alignPct}%`)
+                            ),
+                            e('div', { className: 'bg-white p-5 rounded-2xl border border-gray-200 shadow-sm' },
+                                e('span', { className: 'text-xs font-semibold uppercase text-gray-400' }, 'HQIM IMPLEMENTATION'),
+                                e('div', { className: 'text-2xl font-bold mt-2 text-blue-600' }, loading ? '--%' : `${metrics.hqimPct}%`)
+                            ),
+                            e('div', { className: 'bg-white p-5 rounded-2xl border border-gray-200 shadow-sm' },
+                                e('span', { className: 'text-xs font-semibold uppercase text-gray-400' }, 'Schools Represented'),
+                                e('div', { className: 'text-2xl font-bold mt-2 text-purple-600' }, 
+                                    loading ? '--' : `${metrics.uniqueSchools} / ${metrics.totalPossibleSchools}`
+                                )
+                            )
+                        ),
+
+                        // Single row containing the stacked bar charts on the left and the map on the right
+                        e('div', { className: 'grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch' },
+                            // Left Column: Stacked Bar Charts
+                            e('div', { className: 'lg:col-span-5 flex flex-col space-y-4' },
+                                // Grade-Level Standard Alignment Bar Chart
+                                e('div', { className: 'bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-col justify-between flex-1' },
+                                    e('div', { className: 'flex justify-between items-center mb-1.5' },
+                                        e('h3', { className: 'text-xs font-bold text-gray-800 uppercase tracking-wide' }, 'Grade-Level Standard Alignment'),
+                                        e('span', { className: 'text-[10px] text-gray-400 italic' }, 'Click a bar to filter')
+                                    ),
+                                    e('div', { className: 'relative h-44 w-full' },
+                                        e('canvas', { ref: alignChartRef })
+                                    )
+                                ),
+                                // High-Quality Instructional Materials Bar Chart
+                                e('div', { className: 'bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-col justify-between flex-1' },
+                                    e('div', { className: 'flex justify-between items-center mb-1.5' },
+                                        e('h3', { className: 'text-xs font-bold text-gray-800 uppercase tracking-wide' }, 'High-Quality Instructional Materials'),
+                                        e('span', { className: 'text-[10px] text-gray-400 italic' }, 'Click a bar to filter')
+                                    ),
+                                    e('div', { className: 'relative h-44 w-full' },
+                                        e('canvas', { ref: hqimChartRef })
+                                    )
+                                )
+                            ),
+
+                            // Right Column: Geographic Map Card with standard OpenStreetMap tiles
+                            e('div', { className: 'lg:col-span-7 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm relative overflow-hidden flex flex-col justify-between' },
+                                e('div', { className: 'flex flex-col sm:flex-row items-start sm:items-center justify-between pb-3 mb-2 border-b border-gray-100 gap-2' },
+                                    e('div', null,
+                                        e('div', { className: 'flex items-center space-x-2' },
+                                            e('i', { className: 'fa-solid fa-map-location-dot text-blue-600 text-sm' }),
+                                            e('h3', { className: 'text-sm font-bold text-gray-800' }, 'Albuquerque School District Geographic Map'),
+                                            e('span', { className: 'text-xs font-semibold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full' },
+                                                `${activeFilteredSitesCount} Mapped Sites`
+                                            )
+                                        ),
+                                        e('p', { className: 'text-xs text-gray-400 mt-0.5' },
+                                            'Shapes indicate school type; colors indicate walkthrough count. Hover over a pin to view school name; click to filter.'
+                                        )
+                                    ),
+                                    selectedSchool !== 'all' && e('button', {
+                                        onClick: function() { setSelectedSchool('all'); },
+                                        className: 'text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 px-3 py-1 rounded-lg font-semibold flex items-center space-x-1.5 transition'
+                                    },
+                                        e('span', null, `Reset: ${selectedSchool}`),
+                                        e('i', { className: 'fa-solid fa-xmark text-xs' })
+                                    )
+                                ),
+                                
+                                // Map Legend
+                                e('div', { className: 'mb-3 p-2.5 bg-gray-50 rounded-xl border border-gray-200 text-xs space-y-1.5' },
+                                    e('div', { className: 'flex items-center flex-wrap gap-x-4 gap-y-1' },
+                                        e('span', { className: 'font-bold uppercase tracking-wider text-[10px] text-gray-500 w-20 flex-shrink-0' }, 'School:'),
+                                        e('div', { className: 'flex items-center space-x-1.5' },
+                                            e('span', {
+                                                style: {
+                                                    display: 'inline-block',
+                                                    width: '10px',
+                                                    height: '10px',
+                                                    backgroundColor: '#475569',
+                                                    borderRadius: '50%',
+                                                    border: '1px solid #ffffff',
+                                                    boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                                                    flexShrink: 0
+                                                }
+                                            }),
+                                            e('span', { className: 'text-[11px] font-medium text-gray-700' }, 'Elementary (Circle)')
+                                        ),
+                                        e('div', { className: 'flex items-center space-x-1.5' },
+                                            e('span', {
+                                                style: {
+                                                    display: 'inline-block',
+                                                    width: '9px',
+                                                    height: '9px',
+                                                    backgroundColor: '#475569',
+                                                    transform: 'rotate(45deg)',
+                                                    border: '1px solid #ffffff',
+                                                    boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                                                    borderRadius: '2px',
+                                                    flexShrink: 0
+                                                }
+                                            }),
+                                            e('span', { className: 'text-[11px] font-medium text-gray-700' }, 'Middle (Diamond)')
+                                        ),
+                                        e('div', { className: 'flex items-center space-x-1.5' },
+                                            e('span', {
+                                                style: {
+                                                    display: 'inline-block',
+                                                    width: '9px',
+                                                    height: '9px',
+                                                    backgroundColor: '#475569',
+                                                    borderRadius: '2px',
+                                                    border: '1px solid #ffffff',
+                                                    boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                                                    flexShrink: 0
+                                                }
+                                            }),
+                                            e('span', { className: 'text-[11px] font-medium text-gray-700' }, 'High (Square)')
+                                        ),
+                                        e('div', { className: 'flex items-center space-x-1.5' },
+                                            e('span', {
+                                                style: {
+                                                    display: 'inline-block',
+                                                    width: '0',
+                                                    height: '0',
+                                                    borderLeft: '5px solid transparent',
+                                                    borderRight: '5px solid transparent',
+                                                    borderBottom: '10px solid #475569',
+                                                    filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.2))',
+                                                    flexShrink: 0
+                                                }
+                                            }),
+                                            e('span', { className: 'text-[11px] font-medium text-gray-700' }, 'K-8/Other (Triangle)')
+                                        )
+                                    ),
+                                    e('div', { className: 'flex items-center flex-wrap gap-x-4 gap-y-1 pt-1.5 border-t border-gray-200/60' },
+                                        e('span', { className: 'font-bold uppercase tracking-wider text-[10px] text-gray-500 w-20 flex-shrink-0' }, 'Visits:'),
+                                        e('div', { className: 'flex items-center space-x-1.5' },
+                                            e('span', {
+                                                style: {
+                                                    display: 'inline-block',
+                                                    width: '10px',
+                                                    height: '10px',
+                                                    backgroundColor: '#94a3b8',
+                                                    borderRadius: '2px',
+                                                    border: '1px solid #cbd5e1'
+                                                }
+                                            }),
+                                            e('span', { className: 'text-[11px] font-medium text-gray-700' }, '0')
+                                        ),
+                                        e('div', { className: 'flex items-center space-x-1.5' },
+                                            e('span', {
+                                                style: {
+                                                    display: 'inline-block',
+                                                width: '10px',
+                                                height: '10px',
+                                                backgroundColor: '#f59e0b',
+                                                borderRadius: '2px',
+                                                border: '1px solid #d97706'
+                                            }
+                                        }),
+                                        e('span', { className: 'text-[11px] font-medium text-gray-700' }, '1 – 5')
+                                    ),
+                                    e('div', { className: 'flex items-center space-x-1.5' },
+                                        e('span', {
+                                            style: {
+                                                display: 'inline-block',
+                                                width: '10px',
+                                                height: '10px',
+                                                backgroundColor: '#0284c7',
+                                                borderRadius: '2px',
+                                                border: '1px solid #0369a1'
+                                            }
+                                        }),
+                                        e('span', { className: 'text-[11px] font-medium text-gray-700' }, '6 – 10')
+                                    ),
+                                    e('div', { className: 'flex items-center space-x-1.5' },
+                                        e('span', {
+                                            style: {
+                                                display: 'inline-block',
+                                                width: '10px',
+                                                height: '10px',
+                                                backgroundColor: '#10b981',
+                                                borderRadius: '2px',
+                                                border: '1px solid #059669'
+                                            }
+                                        }),
+                                        e('span', { className: 'text-[11px] font-medium text-gray-700' }, '11+')
+                                    )
+                                )
+                            ),
+
+                            e('div', { className: 'relative w-full rounded-xl overflow-hidden border border-gray-200 shadow-inner flex-1 min-h-[340px]' },
+                                e('div', {
+                                    ref: mapContainerRef,
+                                    className: 'w-full h-full min-h-[340px] z-0'
+                                })
+                            )
+                        )
+                    ),
+
+                        // Walkthrough Filters Bar
+                        e('div', { className: 'bg-white p-4 rounded-2xl border border-gray-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4' },
+                            e('div', { className: 'flex items-center space-x-2.5 flex-wrap gap-y-2' },
+                                e('div', { className: 'flex items-center space-x-2 text-xs font-bold text-gray-700 uppercase tracking-wider' },
+                                    e('i', { className: 'fa-solid fa-filter text-blue-600' }),
+                                    e('span', null, 'Walkthrough Filters:')
+                                ),
+                                (selectedSchool !== 'all' || selectedSupervisor !== 'all' || selectedLevel !== 'all' || selectedFramework !== 'all' || selectedGrade !== 'all' || selectedAlignmentBar !== 'all' || selectedHqimBar !== 'all') && e('button', {
+                                    onClick: function() {
+                                        setSelectedSchool('all');
+                                        setSelectedSupervisor('all');
+                                        setSelectedLevel('all');
+                                        setSelectedFramework('all');
+                                        setSelectedGrade('all');
+                                        setSelectedAlignmentBar('all');
+                                        setSelectedHqimBar('all');
+                                    },
+                                    className: 'text-[11px] text-red-600 hover:text-red-800 font-semibold flex items-center space-x-1 px-2 py-0.5 rounded bg-red-50 transition'
+                                },
+                                    e('i', { className: 'fa-solid fa-rotate-left text-[10px]' }),
+                                    e('span', null, 'Reset All Filters')
+                                )
+                            ),
+                            e('div', { className: 'flex items-center gap-2 flex-wrap' },
+                                supervisorsList.length > 0 && e('select', {
+                                    value: selectedSupervisor,
+                                    onChange: function(ev) { setSelectedSupervisor(ev.target.value); },
+                                    className: 'bg-gray-50 text-xs px-3 py-2 rounded-lg border border-gray-300 font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500'
+                                },
+                                    e('option', { value: 'all' }, 'All Supervisors'),
+                                    supervisorsList.map(function(s) { return e('option', { key: s, value: s }, s); })
+                                ),
+                                levelsList.length > 0 && e('select', {
+                                    value: selectedLevel,
+                                    onChange: function(ev) { setSelectedLevel(ev.target.value); },
+                                    className: 'bg-gray-50 text-xs px-3 py-2 rounded-lg border border-gray-300 font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500'
+                                },
+                                    e('option', { value: 'all' }, 'All School Levels'),
+                                    levelsList.map(function(lvl) { return e('option', { key: lvl, value: lvl }, lvl); })
+                                ),
+                                frameworksList.length > 0 && e('select', {
+                                    value: selectedFramework,
+                                    onChange: function(ev) { setSelectedFramework(ev.target.value); },
+                                    className: 'bg-gray-50 text-xs px-3 py-2 rounded-lg border border-gray-300 font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500'
+                                },
+                                    e('option', { value: 'all' }, 'All Performance Frameworks'),
+                                    frameworksList.map(function(fw) { return e('option', { key: fw, value: fw }, fw); })
+                                ),
+                                gradesList.length > 0 && e('select', {
+                                    value: selectedGrade,
+                                    onChange: function(ev) { setSelectedGrade(ev.target.value); },
+                                    className: 'bg-gray-50 text-xs px-3 py-2 rounded-lg border border-gray-300 font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500'
+                                },
+                                    e('option', { value: 'all' }, 'All Grades'),
+                                    gradesList.map(function(g) { return e('option', { key: g, value: g }, `Grade ${g}`); })
+                                ),
+                                e('select', {
+                                    value: selectedSchool,
+                                    onChange: function(ev) { setSelectedSchool(ev.target.value); },
+                                    className: 'bg-gray-50 text-xs px-3 py-2 rounded-lg border border-gray-300 font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500'
+                                },
+                                    e('option', { value: 'all' }, 'All Schools'),
+                                    schoolsList.map(function(s) { return e('option', { key: s, value: s }, s); })
+                                )
+                            )
+                        ),
+
+                        // Walkthrough Observations Log Table
+                        e('div', { className: 'bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden' },
+                            e('div', { className: 'p-5 flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-gray-100' },
+                                e('div', { className: 'flex items-center space-x-3 flex-wrap gap-y-2' },
+                                    e('h3', { className: 'text-base font-bold text-gray-800' }, 'Walkthrough Observations Log'),
+                                    selectedAlignmentBar !== 'all' && e('span', {
+                                        className: 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 cursor-pointer',
+                                        onClick: function() { setSelectedAlignmentBar('all'); },
+                                        title: 'Click to reset alignment filter'
+                                    },
+                                        `Alignment: ${selectedAlignmentBar}`,
+                                        e('i', { className: 'fa-solid fa-xmark ml-1.5 text-xs' })
+                                    ),
+                                    selectedHqimBar !== 'all' && e('span', {
+                                        className: 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-sky-100 text-sky-800 cursor-pointer',
+                                        onClick: function() { setSelectedHqimBar('all'); },
+                                        title: 'Click to reset HQIM filter'
+                                    },
+                                        `HQIM: ${selectedHqimBar}`,
+                                        e('i', { className: 'fa-solid fa-xmark ml-1.5 text-xs' })
+                                    )
+                                ),
+                                e('div', { className: 'text-xs text-gray-500 font-medium' },
+                                    `Filtered Log: ${sortedData.length} records`
+                                )
+                            ),
+                            e('div', { className: 'w-full overflow-x-auto border-t border-gray-100' },
+                                e('table', { 
+                                    className: 'w-full text-left border-collapse table-fixed',
+                                    style: { minWidth: '950px' } 
+                                },
+                                    e('colgroup', null,
+                                        e('col', { style: { width: '9%' } }),
+                                        e('col', { style: { width: '22%' } }),
+                                        e('col', { style: { width: '8%' } }),
+                                        e('col', { style: { width: '12%' } }),
+                                        e('col', { style: { width: '15%' } }),
+                                        e('col', { style: { width: '15%' } }),
+                                        e('col', { style: { width: '19%' } })
+                                    ),
+                                    e('thead', null,
+                                        e('tr', { className: 'bg-gray-50 text-[11px] uppercase tracking-wider text-gray-500 font-semibold border-b border-gray-200 select-none align-bottom' },
+                                            e('th', {
+                                                onClick: function() { handleSort('domain'); },
+                                                className: 'py-3.5 px-3 cursor-pointer hover:bg-gray-100 transition-colors'
+                                            },
+                                                e('div', { className: 'flex items-center justify-between' },
+                                                    e('span', { className: 'break-words leading-tight' }, 'Domain'),
+                                                    renderSortIcon('domain')
+                                                )
+                                            ),
+                                            e('th', {
+                                                onClick: function() { handleSort('school'); },
+                                                className: 'py-3.5 px-3 cursor-pointer hover:bg-gray-100 transition-colors'
+                                            },
+                                                e('div', { className: 'flex items-center justify-between' },
+                                                    e('span', { className: 'break-words leading-tight' }, 'School Name'),
+                                                    renderSortIcon('school')
+                                                )
+                                            ),
+                                            e('th', {
+                                                onClick: function() { handleSort('grade'); },
+                                                className: 'py-3.5 px-3 cursor-pointer hover:bg-gray-100 transition-colors'
+                                            },
+                                                e('div', { className: 'flex items-center justify-between' },
+                                                    e('span', { className: 'break-words leading-tight' }, 'Grade'),
+                                                    renderSortIcon('grade')
+                                                )
+                                            ),
+                                            e('th', {
+                                                onClick: function() { handleSort('date'); },
+                                                className: 'py-3.5 px-3 cursor-pointer hover:bg-gray-100 transition-colors'
+                                            },
+                                                e('div', { className: 'flex items-center justify-between' },
+                                                    e('span', { className: 'break-words leading-tight' }, 'Date of Observation'),
+                                                    renderSortIcon('date')
+                                                )
+                                            ),
+                                            e('th', {
+                                                onClick: function() { handleSort('alignment'); },
+                                                className: 'py-3.5 px-3 cursor-pointer hover:bg-gray-100 transition-colors'
+                                            },
+                                                e('div', { className: 'flex items-center justify-between' },
+                                                    e('span', { className: 'break-words leading-tight' }, 'Standards Alignment'),
+                                                    renderSortIcon('alignment')
+                                                )
+                                            ),
+                                            e('th', {
+                                                onClick: function() { handleSort('hqim'); },
+                                                className: 'py-3.5 px-3 cursor-pointer hover:bg-gray-100 transition-colors'
+                                            },
+                                                e('div', { className: 'flex items-center justify-between' },
+                                                    e('span', { className: 'break-words leading-tight' }, 'HQIM Implementation'),
+                                                    renderSortIcon('hqim')
+                                                )
+                                            ),
+                                            e('th', {
+                                                onClick: function() { handleSort('task'); },
+                                                className: 'py-3.5 px-3 cursor-pointer hover:bg-gray-100 transition-colors'
+                                            },
+                                                e('div', { className: 'flex items-center justify-between' },
+                                                    e('span', { className: 'break-words leading-tight' }, 'Task Observed'),
+                                                    renderSortIcon('task')
+                                                )
+                                            )
+                                        )
+                                    ),
+                                    e('tbody', { className: 'divide-y divide-gray-100 text-xs' },
+                                        loading ? e('tr', null, e('td', { colSpan: 7, className: 'py-6 text-center text-gray-400' }, 'Syncing Fact and Dimension Tables...'))
+                                        : sortedData.length === 0 ? e('tr', null, e('td', { colSpan: 7, className: 'py-6 text-center text-gray-400' }, 'No matching records found.'))
+                                        : sortedData.map(function(item) {
+                                            return e('tr', { key: item.id, className: 'hover:bg-gray-50' },
+                                                e('td', { className: 'py-3.5 px-3 align-top break-words' },
+                                                    e('span', {
+                                                        className: `inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                                                            item.domain === 'Math' ? 'bg-green-100 text-green-800' : 'bg-purple-100 text-purple-800'
+                                                        }`
+                                                    }, item.domain)
+                                                ),
+                                                e('td', { className: 'py-3.5 px-3 font-semibold text-gray-800 align-top break-words' },
+                                                    e('div', { className: 'font-medium text-gray-900 break-words' }, item.school),
+                                                    (item.schoolLevel !== 'N/A' || item.performanceFramework !== 'N/A' || item.supervisor !== 'N/A') && e('div', { className: 'flex flex-wrap gap-1 text-[10px] text-gray-400 font-normal mt-1' },
+                                                        item.schoolLevel !== 'N/A' && e('span', { className: 'bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-medium whitespace-nowrap' }, item.schoolLevel),
+                                                        item.performanceFramework !== 'N/A' && e('span', { className: 'bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-medium whitespace-nowrap' }, item.performanceFramework),
+                                                        item.supervisor !== 'N/A' && e('span', { className: 'bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-medium whitespace-nowrap' }, `Sup: ${item.supervisor}`)
+                                                    )
+                                                ),
+                                                e('td', { className: 'py-3.5 px-3 font-medium align-top break-words text-gray-700' }, `Grade ${item.grade}`),
+                                                e('td', { className: 'py-3.5 px-3 text-gray-600 align-top break-words text-[11px]' },
+                                                    item.date && item.date.includes(' ')
+                                                        ? [
+                                                            e('span', { key: 'd', className: 'block font-medium text-gray-800' }, item.date.split(' ')[0]),
+                                                            e('span', { key: 't', className: 'block text-gray-400 text-[10px]' }, item.date.split(' ').slice(1).join(' '))
+                                                        ]
+                                                        : item.date
+                                                ),
+                                                e('td', { className: 'py-3.5 px-3 align-top break-words' },
+                                                    e('span', {
+                                                        className: `inline-block px-2.5 py-0.5 rounded text-[10px] font-semibold break-words ${
+                                                            item.alignment.toLowerCase() === 'observed' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                                                        }`
+                                                    }, item.alignment)
+                                                ),
+                                                e('td', { className: 'py-3.5 px-3 text-gray-600 align-top break-words leading-relaxed' }, item.hqim),
+                                                e('td', { className: 'py-3.5 px-3 text-gray-600 align-top leading-relaxed break-words' }, item.task)
+                                            );
+                                        })
+                                    )
+                                )
+                            ),
+                            e('div', { className: 'p-4 border-t border-gray-100 flex justify-between items-center text-xs text-gray-500' },
+                                e('span', null, `Showing ${sortedData.length} of ${data.length} records`),
+                                e('span', null, `Last synced: ${syncTime}`)
+                            )
+                        )
+                    )
+                )
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(e(App));
+    </script>
+</body>
+</html>
